@@ -1,5 +1,5 @@
 /**
- * 全局类型定义（Spine 3.8.75 数据结构）
+ * 全局类型定义（Spine 3.8 / 4.3）
  * 对应 FINAL_SPEC 第 6 节
  */
 
@@ -7,6 +7,8 @@
 export interface SpineProjectInfo {
   /** Spine 版本（如 3.8.75），从 skeleton.spine 读取 */
   version: string;
+  /** 读取旧工程时产生 JSON 的编辑器版本。 */
+  exportVersion?: string;
   /** 骨架名称（来自 Info 命令，.spine 才有） */
   skeletonName?: string;
   bones: BoneInfo[];
@@ -21,7 +23,7 @@ export interface SpineProjectInfo {
   size?: { width: number; height: number };
   /** 帧率（来自 Info 命令） */
   fps?: number;
-  /** 版本兼容性警告（非 3.8.75 时填充） */
+  /** 版本兼容性警告 */
   compatibilityWarning?: string;
 }
 
@@ -71,6 +73,7 @@ export interface AnimationInfo {
 /** Info 命令结构化输出 */
 export interface SpineInfoData {
   projectPath: string;
+  skeletons: Array<{ name: string; animations: string[] }>;
   /** 项目文件版本 */
   version: string;
   fps: number;
@@ -89,6 +92,8 @@ export type ExportFormat = "json" | "binary" | "texture" | "video";
 /** 导出选项（对应 CLI 导出设置 JSON） */
 export interface ExportOptions {
   format: ExportFormat;
+  /** 内部编辑时也导出编辑器中标记为不参与发布的内容（4.3）。 */
+  exportAll?: boolean;
   /** 是否包含非必要数据（默认 true） */
   nonessential?: boolean;
   /** 是否格式化（仅 json，默认 true） */

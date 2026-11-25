@@ -16,7 +16,7 @@ export class CheckProjectTool extends BaseTool {
   async run(args: { projectPath: string }): Promise<any> {
     const r = await checkProject(args.projectPath);
     const summary = [
-      `版本 ${r.version.spine}${r.version.compatible ? " ✓" : " ⚠️ 非 3.8"}`,
+      `版本 ${r.version.spine}${r.version.compatible ? " ✓" : " ⚠️ 版本尚未适配"}`,
       `${r.stats.bones}骨骼/${r.stats.slots}插槽/${r.stats.skins}皮肤/${r.stats.animations}动画`,
       `atlas ${r.atlas.found ? "✓" : "✗ 缺失"}`,
       `角色匹配 ${r.roleCoverage.mapped}/${r.roleCoverage.total}`,

@@ -2,15 +2,15 @@
 
 [![中文](https://img.shields.io/badge/lang-中文-red)](README.zh.md) [![EN](https://img.shields.io/badge/lang-EN-blue)](README.md)
 
-> AI-driven Spine 3.8.75 animation workflow server — lets AI clients (Trae / Cursor / Claude Desktop) directly control Spine.
+> Spine 4.3.x and 3.8.x animation workflow server for macOS and Windows — lets AI clients (Trae / Cursor / Claude Desktop) directly control Spine.
 
-[![Node](https://img.shields.io/badge/Node-%3E%3D20-339933)](https://nodejs.org) [![Spine](https://img.shields.io/badge/Spine-3.8.75-yellow)](https://esotericsoftware.com) [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+[![Node](https://img.shields.io/badge/Node-%3E%3D20-339933)](https://nodejs.org) [![Spine](https://img.shields.io/badge/Spine-4.3.x%20%7C%203.8.x-yellow)](https://esotericsoftware.com) [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
 ---
 
 ## 📖 Overview
 
-**Spine MCP Server** is a server built on the [MCP (Model Context Protocol)](https://modelcontextprotocol.io) that wraps **Spine 3.8.75 Professional** editor capabilities into **70 MCP tools**, allowing AI clients to directly:
+**Spine MCP Server** is a server built on the [MCP (Model Context Protocol)](https://modelcontextprotocol.io) that wraps **Spine Professional** editor capabilities into **70 MCP tools**, allowing AI clients to directly:
 
 - Read Spine projects (bones, slots, skins, animations, events, constraints)
 - Modify animation keyframes (rotation, translation, scale, shear, curves)
@@ -26,48 +26,49 @@
 |---|---|
 | 70 MCP Tools | Covers all Spine domains (info, skeleton, attachments, constraints, animation, atlas, project) |
 | Round-Trip Modification | Export JSON → Modify → In-place import, **automatic backup** (`.bak`) |
-| Version Compatibility | Locked to Spine 3.8.75, friendly warnings for other versions |
+| Version Compatibility | Version-specific CLI arguments, keyframes and constraints for Spine 4.3 and 3.8 |
 | Cocos Extension | Cocos Creator 3.8+ visual panel + `.ccx` packaging |
 | Installer Wizard | One-click environment detection + config writing |
 
 ## 🔧 Requirements
 
-- **Node.js ≥ 20** (tested on v22)
-- **Spine.com** (3.8.75 Professional, e.g. `D:\cocos\SpinePro3.8.75\Spine.com`)
-- Optional: Cocos Creator 3.8+ (for extension panel)
+- Node.js 20 or newer and an activated Spine Professional installation. The macOS integration was tested on Apple Silicon with Spine 4.3.26.
+- Cocos Creator 3.8+ is optional for the Cocos extension panel.
 
-## 🚀 Quick Start
+## macOS quick start
 
-```bash
-# 1. Install dependencies + build
-npm install
+Run these commands in the cloned repository.
+
+```sh
+npm ci
 npm run build
-
-# 2. Configure Spine path (or run the installer wizard)
-npm run installer        # Auto-detect Spine/Cocos/Node and write .env
-
-# 3. Verify
 node dist/index.js check
-node dist/index.js info "D:/cocos/SpinePro3.8.75/examples/hero/hero-pro.spine"
+node dist/index.js info "/absolute/path/to/character.spine"
 ```
 
-## 🤖 MCP Config
+The server searches `/Applications/Spine.app` and `~/Applications/Spine.app`. macOS defaults to editor 4.3.26. Set `SPINE_VERSION` in `.env` or your MCP client to pin another exact patch. Set `SPINE_EXE` to a custom app bundle or its `Contents/MacOS/Spine` executable. Windows supports `Spine.com` and keeps the launcher's default editor unless pinned, for example with `SPINE_VERSION=3.8.75`. Run `npm run installer` to generate a local `.env`.
 
-Add the following configuration to your Trae / Cursor / Claude Desktop MCP server settings:
+## MCP client configuration
+
+Replace the server entry point with the absolute path to your clone. For desktop clients with a limited PATH, set `command` to the output of `command -v node`.
 
 ```json
 {
   "mcpServers": {
     "spine-mcp": {
       "command": "node",
-      "args": ["D:/cocos/spine-mcp-server/dist/index.js", "mcp"],
-      "env": { "SPINE_EXE": "D:/cocos/SpinePro3.8.75/Spine.com" }
+      "args": ["/absolute/path/to/spine-mcp-server-macos/dist/index.js", "mcp"],
+      "env": { "SPINE_VERSION": "4.3.26" }
     }
   }
 }
 ```
 
-> ⚠️ If MCP shows "No tools yet", restart your AI client to allow the server process to reload.
+On 4.3, adding or updating animations uses the editor's animation import. Structural edits and animation removal or renaming replace the selected skeleton from exported JSON. Editor-only settings can be lost in that skeleton. Imports into existing projects run on a sibling copy and create a `.bak` before replacing the project. Increase `CLI_TIMEOUT_MS` for full imports of large rigs.
+
+`npm run test:unit` checks JSON and atlas compatibility. `npm run test:4.3` exercises MCP and the local editor on a temporary multi-skeleton project, including a backup check. Textured 4.3 previews use the official 4.3 Canvas runtime with `canvas` and support multi-page atlases.
+
+On Spine 4.3, the CLI `export` command supports `texture` for PNG sequences and `video` for MOV. The `spine_export_video` MCP tool can also encode MP4 and WebM using FFmpeg.
 
 ## 🧩 Tools (70)
 
@@ -93,16 +94,16 @@ The `cocos-extension/` directory provides a Cocos Creator 3.8+ panel:
 ## 🧪 Tests
 
 ```bash
-npm run test:all     # Run all test suites (unit + integration + MCP protocol + extension bridge)
+npm run test:all     # Unit tests and integration tests for the configured editor
 npm run test:unit    # Unit tests only (node:test)
 ```
 
-Test matrix: Unit **20/20** · Phase 3 **37/37** · Phase 4 **45/45** · Phase 5 **13/13** · MCP Protocol **10/10** (70 tools) · Extension Bridge **12/12**
+On macOS, the 4.3 integration test creates a two-skeleton project via MCP, writes and reads back animation and setup edits, verifies the backup, and checks that a failed import preserves the project. The 3.8 integration tests use the sample projects bundled with the Windows editor.
 
 ## 📚 Docs
 
-- [User Manual (EN)](docs/USER_MANUAL.en.md)
-- [User Manual (中文)](docs/USER_MANUAL.md)
+- [3.8 User Manual (EN)](docs/USER_MANUAL.en.md)
+- [3.8 版用户手册（中文）](docs/USER_MANUAL.md)
 - [Cocos Extension README (EN)](docs/cocos-extension-README.en.md)
 - [Cocos Extension README (中文)](docs/cocos-extension-README.md)
 

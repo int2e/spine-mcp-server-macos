@@ -40,7 +40,7 @@ export function parseInfoOutput(stdout: string): SpineInfoData {
   const projectPath = pick(/^Project info:\s*(.+)$/i) ?? "";
   const version = pick(/^Spine version:\s*([0-9.]+)/i) ?? "";
   const fpsRaw = pick(/^Dopesheet FPS:\s*(\d+)/i);
-  const skeletonName = pick(/^Skeleton:\s*(\S+)/i) ?? "";
+  const skeletonName = pick(/^Skeleton:\s*(.+)$/i) ?? "";
   const sizeMatch = lines.find((l) => /^Size:\s*/.test(l))?.match(/^Size:\s*([\d.]+)\s*x\s*([\d.]+)/i);
   const bonesLine = lines.find((l) => /^Bones\s*\(/.test(l));
   const slotsLine = lines.find((l) => /^Slots\s*\(/.test(l));
@@ -48,8 +48,16 @@ export function parseInfoOutput(stdout: string): SpineInfoData {
   const eventsLine = lines.find((l) => /^Events\s*\(/.test(l));
   const animLine = lines.find((l) => /^Animations\s*\(/.test(l));
 
+  const skeletons: SpineInfoData["skeletons"] = [];
+  for (const line of lines) {
+    const name = line.match(/^Skeleton:\s*(.+)$/i)?.[1];
+    if (name) skeletons.push({ name, animations: [] });
+    else if (/^Animations\s*\(/i.test(line) && skeletons.length) skeletons[skeletons.length - 1].animations = parseCountedList(line);
+  }
+
   return {
     projectPath,
+    skeletons,
     version,
     fps: fpsRaw ? parseInt(fpsRaw, 10) : 30,
     skeletonName,

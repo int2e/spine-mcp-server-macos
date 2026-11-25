@@ -13,7 +13,7 @@ export class AddPathTool extends BaseTool {
     projectPath: z.string(),
     name: z.string().describe("约束名（唯一）"),
     bones: z.array(z.string()).describe("受约束骨骼列表"),
-    target: z.string().describe("路径附件名"),
+    target: z.string().describe("路径附件所在的插槽名"),
     positionMode: z.enum(["fixed", "percent"]).optional(),
     spacingMode: z.enum(["length", "fixed", "percent"]).optional(),
     rotateMode: z.enum(["tangent", "chain", "chainScale"]).optional(),

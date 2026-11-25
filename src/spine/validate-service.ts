@@ -1,3 +1,4 @@
+import { constraintsOf } from "./format";
 /**
  * 引用完整性校验服务：纯函数，输入骨架 JSON 返回问题列表。
  * 供 spine_validate_references 工具与 modify-service 修改后自动校验复用。
@@ -17,12 +18,14 @@ export function validateJsonReferences(json: any): string[] {
   }
   // 约束
   for (const type of ["ik", "transform", "path"] as const) {
-    for (const c of json[type] ?? []) {
+    for (const c of constraintsOf(json, type)) {
       for (const b of c.bones ?? []) {
         if (!boneNames.has(b)) issues.push(`${type}约束 "${c.name}" 引用的骨骼 "${b}" 不存在`);
       }
-      if (c.target && (type === "ik" || type === "transform") && !boneNames.has(c.target)) {
-        issues.push(`${type}约束 "${c.name}" 的目标 "${c.target}" 不存在`);
+      if (c.slot && !slotNames.has(c.slot)) issues.push(`约束 "${c.name}" 的插槽 "${c.slot}" 不存在`);
+      const target = c.target ?? c.source;
+      if (target && (type === "ik" || type === "transform") && !boneNames.has(target)) {
+        issues.push(`${type}约束 "${c.name}" 的目标 "${target}" 不存在`);
       }
     }
   }

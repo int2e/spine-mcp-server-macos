@@ -5,6 +5,7 @@
  * - GIF：纯 JS 编码器（零依赖，任意环境可用）
  * - MP4/WebM：调用 ffmpeg（环境变量 FFMPEG_PATH 或 PATH），不存在则回退 GIF
  */
+import { findProjectAtlas } from "../spine/check-service";
 import { z } from "zod";
 import { BaseTool } from "./base.tool";
 import { renderAnimationFrames } from "../spine/render-service";
@@ -14,38 +15,6 @@ import { encodeGif } from "../utils/gif-encoder";
 import { execFileSync, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-
-/** 定位项目同名 atlas/png（同目录 + export 子目录，基础名匹配去掉 -pro/-ess 后缀） */
-function findAtlasPng(project: string): { atlas: string; png: string } | null {
-  const base = path.dirname(project);
-  const nameBase = path.basename(project).replace(/\.spine$/i, "");
-  const bare = nameBase.replace(/-(pro|ess|skeleton)$/i, "");
-  const found: { atlas: string; png: string }[] = [];
-  for (const dir of [base, path.join(base, "export")]) {
-    if (!fs.existsSync(dir)) continue;
-    const files = fs.readdirSync(dir);
-    for (const f of files) {
-      if (!f.endsWith(".atlas")) continue;
-      const b = f.replace(/\.atlas$/i, "").toLowerCase();
-      if (b === nameBase.toLowerCase() || b === bare.toLowerCase() || nameBase.toLowerCase().includes(b) || b.includes(nameBase.toLowerCase())) {
-        const png = path.join(dir, f.replace(/\.atlas$/i, ".png"));
-        if (fs.existsSync(png)) found.push({ atlas: path.join(dir, f), png });
-      }
-    }
-  }
-  if (!found.length) return null;
-  // 优先精确匹配
-  found.sort((a, b) => {
-    const score = (x: { atlas: string }) => {
-      const b2 = path.basename(x.atlas).replace(/\.atlas$/i, "").toLowerCase();
-      if (b2 === nameBase.toLowerCase()) return 100;
-      if (b2 === bare.toLowerCase()) return 90;
-      return 50;
-    };
-    return score(b) - score(a);
-  });
-  return found[0];
-}
 
 /** 检测 ffmpeg 可执行路径 */
 function findFfmpeg(): string | null {
@@ -93,7 +62,7 @@ export class ExportVideoTool extends BaseTool {
         if (!skeletonJson) return { success: false, message: "导出 JSON 失败。", errorCode: "E_CLI_EXEC_FAILED" };
       }
       if (!atlasPath || !imagePath) {
-        const found = args.projectPath ? findAtlasPng(args.projectPath) : null;
+        const found = args.projectPath ? findProjectAtlas(args.projectPath) : null;
         if (!found) {
           return { success: false, message: "未找到项目同名 atlas/png（需先导出过图片，或显式传 atlasPath/imagePath）。", errorCode: "E_INVALID_ARGUMENT" };
         }

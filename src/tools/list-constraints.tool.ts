@@ -1,6 +1,7 @@
 /**
  * 工具：spine_list_constraints — 列出全部约束
  */
+import { constraintsOf } from "../spine/format";
 import { z } from "zod";
 import { BaseTool } from "./base.tool";
 import { readJsonForExport } from "../spine/modify-service";
@@ -18,8 +19,8 @@ export class ListConstraintsTool extends BaseTool {
     const { projectPath } = args;
     const isJson = path.extname(projectPath).toLowerCase() === ".json";
     const json = isJson ? readJsonFile(projectPath) : await readJsonForExport(projectPath);
-    const read = (type: string) => (json[type] ?? []).map((c: any) => ({ type, name: c.name, bones: c.bones, target: c.target }));
-    const constraints = [...read("ik"), ...read("transform"), ...read("path")];
+    const read = (type: string) => constraintsOf(json, type).map((c: any) => ({ type, name: c.name, bones: c.bones ?? (c.bone ? [c.bone] : []), target: c.target ?? c.source ?? c.slot }));
+    const constraints = [...read("ik"), ...read("transform"), ...read("path"), ...read("physics"), ...read("slider")];
     return { success: true, message: `共 ${constraints.length} 个约束`, data: { constraints } };
   }
 }

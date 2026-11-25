@@ -1,6 +1,7 @@
 /**
  * 工具：spine_create_project — 创建空 Spine 项目
  */
+import { newSkeletonVersion } from "../config-manager";
 import { z } from "zod";
 import { BaseTool } from "./base.tool";
 import { importJson } from "../spine/import-service";
@@ -11,7 +12,7 @@ import * as path from "path";
 
 export class CreateProjectTool extends BaseTool {
   name = "spine_create_project";
-  description = "创建一个空的 Spine 3.8.75 项目文件（含 root 骨骼）。示例：{ outputPath:\"D:/out/new.spine\", skeletonName:\"hero\" } → 生成空骨架起点，后续 add_bone/set_attachment 逐步搭建。";
+  description = "创建一个空的 Spine 项目文件（含 root 骨骼）。示例：{ outputPath:\"D:/out/new.spine\", skeletonName:\"hero\" } → 生成空骨架起点，后续 add_bone/set_attachment 逐步搭建。";
   inputSchema = z.object({
     outputPath: z.string().describe("输出的 .spine 文件路径"),
     skeletonName: z.string().default("skeleton").describe("骨架名，默认 skeleton"),
@@ -25,7 +26,7 @@ export class CreateProjectTool extends BaseTool {
       return { success: false, message: `目标文件已存在：${args.outputPath}`, errorCode: "E_INVALID_ARGUMENT" };
     }
     // 生成最小骨架 JSON
-    const skeleton: any = { spine: "3.8.75" };
+    const skeleton: any = { spine: newSkeletonVersion() };
     if (args.width) skeleton.width = args.width;
     if (args.height) skeleton.height = args.height;
     const templateJson = { skeleton, bones: [{ name: "root" }] };

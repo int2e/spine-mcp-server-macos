@@ -5,6 +5,9 @@
  * - 组合类：动作 + 事件触发点（供引擎播粒子/音效）
  * 提供 listEffects（目录）与 applyEffect（一句话执行）两类入口。
  */
+import { uses43 } from "./format";
+import { prepareRuntime } from "./render-runtime";
+import { analyzeAnimation } from "./project-reader";
 import * as fs from "fs";
 import * as path from "path";
 import sharp from "sharp";
@@ -161,14 +164,16 @@ async function renderSequencePreview(projectPath: string, animName: string, p: A
   ensureDir(path.dirname(p.outputPath) || ".");
   const json = await readJsonForExport(projectPath);
   const atlas = parseAtlas(fs.readFileSync(p.atlasPath, "utf8"));
-  const duration = json.animations?.[animName]?.duration ?? 1;
+  const duration = json.animations?.[animName]?.duration ?? analyzeAnimation(json.animations?.[animName]).duration;
   const width = p.width ?? 128, height = p.height ?? 128;
   const n = p.frames ?? 8;
   const cols = Math.min(4, Math.ceil(Math.sqrt(n)));
   const rows = Math.ceil(n / cols);
   const rgbs: Buffer[] = [];
+  const render = uses43(json) ? await prepareRuntime(json, atlas.raw, p.imagePath, path.dirname(p.atlasPath)) : undefined;
   for (let i = 0; i < n; i++) {
-    rgbs.push(await renderFrameToRgba(json, atlas, p.imagePath, animName, duration * (i / n), width, height));
+    const time = duration * i / n;
+    rgbs.push(render ? render({ animationName: animName, time, width, height }).rgba : await renderFrameToRgba(json, atlas, p.imagePath, animName, time, width, height));
   }
   const canvas = sharp({
     create: { width: cols * width, height: rows * height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },

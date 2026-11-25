@@ -236,3 +236,97 @@ test('setBone / setSlotSetup 更新 Setup 属性', () => {
   assert.equal(json.bones[0].rotation, 45);
   assert.equal(json.slots[0].blend, 'additive');
 });
+
+test('version checks distinguish 4.3 and 3.8 patch releases from other formats', () => {
+  const { isSupportedVersion } = require('../dist/constants.js');
+  const { parseProjectJson } = require('../dist/spine/project-reader.js');
+  for (const v of ['4.3.1', '4.3.26', '3.8.75', '3.8.99']) {
+    assert.equal(isSupportedVersion(v), true);
+    assert.equal(parseProjectJson({ skeleton: { spine: v } }).compatibilityWarning, undefined);
+  }
+  const imported = parseProjectJson({ skeleton: { spine: '4.3.26', fps: 60 } }, { sourceVersion: '3.8.75' });
+  assert.deepEqual([imported.version, imported.exportVersion, imported.fps], ['3.8.75', '4.3.26', 60]);
+  for (const v of ['4.2.43', '4.30.1', '3.80.75', '4.3.x', undefined]) assert.equal(isSupportedVersion(v), false);
+});
+
+test('4.3 edits use split axes, native rotation, absolute curves and duration-scaled handles', () => {
+  const doc = { skeleton: { spine: '4.3.26' }, bones: [{ name: 'arm', x: 8 }],
+    animations: { wave: { bones: { arm: { rotate: [{}, { time: 2, value: 40 }], translatex: [{ value: 8 }] } } } } };
+  const tl = doc.animations.wave.bones.arm;
+  h.updateBoneKeyframe(doc, 'wave', 'arm', 0, { rotation: 20, x: 7, y: 1 });
+  assert.deepEqual(tl.rotate[0], { value: 20 });
+  assert.deepEqual(tl.translatex[0], { value: 7 });
+  assert.equal(tl.translatey[0].value, 1);
+  assert.equal(tl.translate, undefined);
+  h.setCurve(doc, 'wave', 'bones.arm.rotate', 0, 'bezier', { c1x: .25, c1y: .1, c2x: .75, c2y: .9 });
+  assert.deepEqual(tl.rotate[0].curve, [.5, 22, 1.5, 38]);
+  h.scaleAnimationDuration(doc, 'wave', 4);
+  assert.deepEqual(tl.rotate[0].curve, [1, 22, 3, 38]);
+});
+
+test('4.3 draw order, slot colors and deform timelines use native data structures', () => {
+  const doc = { skeleton: { spine: '4.3.26' }, slots: ['a', 'b', 'c'].map(name => ({ name })), animations: { a: {} } };
+  h.setDrawOrder(doc, 'a', 0, ['c', 'a', 'b']);
+  h.updateSlotKeyframe(doc, 'a', 'a', 0, { color: 'ff0000ff' });
+  h.updateDeformKeyframe(doc, 'a', 'default', 'a', 'mesh', 0, [2, 4]);
+  const anim = doc.animations.a;
+  assert.deepEqual(anim.drawOrder[0].offsets.map(o => o.offset), [1, 1, -2]);
+  assert.equal(anim.slots.a.rgba[0].color, 'ff0000ff');
+  h.renameSlot(doc, 'a', 'renamed');
+  assert.equal(anim.drawOrder[0].offsets[0].slot, 'renamed');
+  assert.deepEqual(anim.attachments.default.renamed.mesh.deform[0].vertices, [2, 4]);
+});
+
+test('4.3 constraints preserve cross-type ordering and references', () => {
+  const doc = { skeleton: { spine: '4.3.26' }, bones: ['root', 'arm', 'target'].map(name => ({ name })),
+    slots: [{ name: 'rail', bone: 'root' }], constraints: [{ type: 'physics', name: 'spring', bone: 'arm' }], animations: { idle: {} } };
+  h.addIk(doc, 'aim', ['arm'], 'target');
+  h.addTransform(doc, 'follow', ['arm'], 'target', { translateMix: .5 });
+  h.addPath(doc, 'path', ['arm'], 'rail');
+  assert.deepEqual(doc.constraints.map(c => c.type), ['physics', 'ik', 'transform', 'path']);
+  assert.equal(doc.constraints[2].source, 'target');
+  assert.equal(doc.constraints[2].mixY, .5);
+  assert.deepEqual(doc.constraints[2].properties.x.to.x, {});
+  h.updateConstraintKeyframe(doc, 'path', 'idle', 'path', .2, { position: 1, translateMix: .2 });
+  assert.deepEqual(doc.animations.idle.path.path.mix[0], { time: .2, mixX: .2, mixY: .2 });
+  assert.equal(doc.animations.idle.path.path.position[0].value, 1);
+  h.renameBone(doc, 'target', 'hand');
+  assert.equal(doc.constraints[1].target, 'hand');
+  assert.equal(doc.constraints[2].source, 'hand');
+  h.deleteConstraint(doc, 'path', 'path');
+  assert.equal(doc.animations.idle.path.path, undefined);
+});
+
+test('4.3 animation import retains source meshes across skins and slots', () => {
+  const { prepareAnimationImport } = require('../dist/spine/modify-service.js');
+  const doc = { slots: [{ name: 'a', attachment: 'tile' }],
+    skins: [{ name: 'default', attachments: { a: { tile: {}, unused: {} }, b: { base: { type: 'mesh' } } } },
+      { name: 'extra', attachments: { a: { linked: { type: 'linkedmesh', source: 'base', slot: 'b' } } } }],
+    animations: { wave: { attachments: { extra: { a: { linked: { deform: [{}] } } } } }, other: {} } };
+  prepareAnimationImport(doc, ['wave']);
+  assert.deepEqual(Object.keys(doc.animations), ['wave']);
+  assert.deepEqual(Object.keys(doc.skins[0].attachments.a), ['tile']);
+  assert.equal(doc.skins[0].attachments.b.base.type, 'mesh');
+  assert.equal(doc.skins[1].attachments.a.linked.source, 'base');
+});
+
+test('multi-page 4.3 atlas parses compact bounds, trimming and numeric rotation', () => {
+  const parsed = atlas.parseAtlas('a.png\nsize:128,128\npma:true\nhead\nbounds:3,4,40,15\noffsets:2,7,50,30\nrotate:90\n\nb.png\nsize:64,64\nboot\nbounds:1,2,12,8\n');
+  assert.deepEqual(parsed.pages.map(p => p.name), ['a.png', 'b.png']);
+  assert.equal(parsed.pages[0].pma, true);
+  const [head, boot] = parsed.regions;
+  assert.deepEqual([head.x, head.y, head.width, head.height, head.origWidth, head.offsetY, head.degrees], [3, 4, 40, 15, 50, 7, 90]);
+  assert.deepEqual([boot.page, boot.origWidth, boot.origHeight], [1, 12, 8]);
+});
+
+test('4.3 mirrored draw-order offsets remain valid for the opposite slot', () => {
+  const { mirrorAnimation } = require('../dist/spine/animation-mirror-service.js');
+  const { drawOrderSlots } = require('../dist/spine/format.js');
+  const setup = ['arm_l', 'body', 'arm_r'];
+  const doc = { skeleton: { spine: '4.3.26' }, slots: setup.map(name => ({ name })),
+    animations: { wave: { drawOrder: [{ offsets: [{ slot: 'arm_l', offset: 2 }] }] } } };
+  mirrorAnimation(doc, 'wave', { outputName: 'opposite' });
+  assert.deepEqual(drawOrderSlots(setup, doc.animations.opposite.drawOrder[0].offsets), ['arm_r', 'arm_l', 'body']);
+  h.deleteSlot(doc, 'body');
+  assert.deepEqual(drawOrderSlots(['arm_l', 'arm_r'], doc.animations.opposite.drawOrder[0].offsets), ['arm_r', 'arm_l']);
+});

@@ -4,6 +4,10 @@
  * - 结构统计（骨骼/插槽/皮肤/动画/约束/事件/附件）
  * - 可动画角色覆盖：哪些骨骼能匹配角色、哪些模板在当前骨架上可用
  */
+import { constraintsOf } from "./format";
+import { getProjectInfo } from "./info-service";
+import { readJsonFile } from "../utils/file-utils";
+import { isSupportedVersion } from "../constants";
 import * as fs from "fs";
 import * as path from "path";
 import { readJsonForExport } from "./modify-service";
@@ -25,14 +29,16 @@ export function findProjectAtlas(project: string): { atlas: string; png: string 
   const nameBase = path.basename(project).replace(/\.spine$/i, "");
   const bare = nameBase.replace(/-(pro|ess|skeleton)$/i, "");
   const found: Array<{ atlas: string; png: string }> = [];
-  for (const dir of [base, path.join(base, "export")]) {
+  for (const dir of [base, path.join(base, "export"), path.join(base, "runtime")]) {
     if (!fs.existsSync(dir)) continue;
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith(".atlas")) continue;
       const b = f.replace(/\.atlas$/i, "").toLowerCase();
       if (b === nameBase.toLowerCase() || b === bare.toLowerCase() || nameBase.toLowerCase().includes(b) || b.includes(nameBase.toLowerCase())) {
-        const png = path.join(dir, f.replace(/\.atlas$/i, ".png"));
-        if (fs.existsSync(png)) found.push({ atlas: path.join(dir, f), png });
+        const atlas = path.join(dir, f);
+        const page = fs.readFileSync(atlas, "utf8").trimStart().split(/\r?\n/, 1)[0].trim();
+        const png = path.join(dir, page);
+        if (page && fs.existsSync(png)) found.push({ atlas, png });
       }
     }
   }
@@ -49,10 +55,12 @@ export function findProjectAtlas(project: string): { atlas: string; png: string 
 }
 
 export async function checkProject(projectPath: string): Promise<CheckResult> {
-  const json = await readJsonForExport(projectPath);
+  const isJson = path.extname(projectPath).toLowerCase() === ".json";
+  const info = isJson ? undefined : await getProjectInfo(projectPath);
+  const json = isJson ? readJsonFile(projectPath) : await readJsonForExport(projectPath, info?.skeletonName);
   const issues = validateJsonReferences(json);
-  const spine = json.skeleton?.spine ?? "unknown";
-  const compatible = /^3\.8/.test(spine);
+  const spine = info?.version || json.skeleton?.spine || "unknown";
+  const compatible = isSupportedVersion(spine);
 
   const skins = Array.isArray(json.skins) ? json.skins : Object.values(json.skins ?? {});
   let attachments = 0;
@@ -81,7 +89,7 @@ export async function checkProject(projectPath: string): Promise<CheckResult> {
       slots: (json.slots ?? []).length,
       skins: skins.length,
       animations: Object.keys(json.animations ?? {}).length,
-      constraints: (json.ik ?? []).length + (json.transform ?? []).length + (json.path ?? []).length,
+      constraints: json.constraints?.length ?? (constraintsOf(json, "ik").length + constraintsOf(json, "transform").length + constraintsOf(json, "path").length),
       events: Object.keys(json.events ?? {}).length,
       attachments,
     },

@@ -4,6 +4,8 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { isSpine43 } from "../constants";
+import { getProjectInfo } from "./info-service";
 import { cliExecutor } from "./cli-executor";
 import { ExportOptions } from "../types";
 import { ErrorCode, SpineError } from "../utils/error-codes";
@@ -63,6 +65,37 @@ export function generateExportSettings(options: ExportOptions): Record<string, a
   }
 }
 
+async function exportMedia43(projectPath: string, out: string, settingsPath: string, options: ExportOptions,
+  skeletons: Array<{ name: string; animations: string[] }>): Promise<string[]> {
+  const movie = options.format === "video";
+  const ext = movie ? ".mov" : ".png";
+  if (options.extension && options.extension !== ext) {
+    throw new SpineError(ErrorCode.INVALID_ARGUMENT, `此 Spine 导出格式使用 ${ext}。MP4 可使用 spine_export_video。`);
+  }
+  const outputs: string[] = [];
+  // Names may contain animation folders. Encode them for the output path, preserving the CLI argument verbatim.
+  const segment = (name: string) => encodeURIComponent(name).replace(/\./g, "%2E");
+  for (const skeleton of skeletons) {
+    const dir = ensureDir(path.join(out, segment(skeleton.name)));
+    const animations = movie ? skeleton.animations : [undefined];
+    for (const animation of animations) {
+      const target = animation === undefined ? dir : path.join(dir, segment(animation) + ext);
+      const settings = {
+        class: movie ? "export-mov" : "export-png", exportType: skeleton.animations.length ? "animation" : "setup",
+        skeletonType: "single", skeleton: skeleton.name, animationType: movie ? "single" : "all", animation,
+        skinType: "current", renderImages: true, maxBounds: true, fps: options.fps ?? 30,
+        rangeStart: options.frameCount ? 0 : -1, rangeEnd: options.frameCount ? options.frameCount - 1 : -1,
+        cropWidth: options.width ?? 0, cropHeight: options.height ?? 0,
+      };
+      fs.writeFileSync(settingsPath, JSON.stringify(settings));
+      await cliExecutor.exec({ args: ["-i", projectPath, "-o", target, "-e", settingsPath] });
+      if (movie) outputs.push(target);
+      else outputs.push(...fs.readdirSync(dir, { recursive: true, encoding: "utf8" }).filter(f => f.endsWith(ext)).map(f => path.join(dir, f)));
+    }
+  }
+  return outputs;
+}
+
 /**
  * 执行导出。
  * @param projectPath  .spine 项目路径
@@ -80,7 +113,12 @@ export async function exportProject(projectPath: string, outputDir: string, opti
   fs.writeFileSync(settingsPath, JSON.stringify(settings), "utf8");
 
   try {
-    await cliExecutor.exec({ args: ["-i", projectPath, "-o", outputDir, "-e", settingsPath] });
+    if (options.format === "video" || options.format === "texture") {
+      const info = await getProjectInfo(projectPath);
+      if (isSpine43(info.version)) return await exportMedia43(projectPath, outputDir, settingsPath, options, info.skeletons);
+    }
+    const flags = options.exportAll ? ["--export-all"] : [];
+    await cliExecutor.exec({ args: ["-i", projectPath, "-o", outputDir, ...flags, "-e", settingsPath] });
     // 收集输出目录中新增的文件
     return fs.readdirSync(outputDir).map((f) => path.join(outputDir, f));
   } finally {

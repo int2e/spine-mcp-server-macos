@@ -20,12 +20,14 @@ export interface AtlasPage {
   format?: string;
   filter?: string;
   repeat?: string;
+  pma?: boolean;
 }
 
 export interface AtlasRegion {
   name: string;
   page: number;
   rotate: boolean;
+  degrees?: number;
   x: number;
   y: number;
   width: number;
@@ -45,89 +47,60 @@ export interface ParsedAtlas {
 
 /** 解析 .atlas 文本 */
 export function parseAtlas(text: string): ParsedAtlas {
-  const lines = text.split(/\r?\n/).map((l) => l.trim());
-  const pages: AtlasPage[] = [];
-  const regions: AtlasRegion[] = [];
-  let currentPage: AtlasPage | null = null;
-  let currentRegion: Partial<AtlasRegion> | null = null;
-  let index = 0;
-
-  const flushRegion = () => {
-    if (currentRegion && currentRegion.name) {
-      currentRegion.page = pages.length - 1;
-      currentRegion.index = currentRegion.index ?? index++;
-      regions.push(currentRegion as AtlasRegion);
-    }
-    currentRegion = null;
-  };
-
-  for (const line of lines) {
-    if (!line) continue;
-    if (line.startsWith("size:")) {
-      const [w, h] = line.slice(5).split(",").map((s) => parseFloat(s));
-      if (currentRegion) {
-        currentRegion.width = w;
-        currentRegion.height = h;
-      } else if (currentPage) {
-        currentPage.size = { w, h };
+  const pages: AtlasPage[] = [], regions: AtlasRegion[] = [];
+  let page: AtlasPage | undefined, region: AtlasRegion | undefined;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) { page = undefined; region = undefined; continue; }
+    const colon = line.indexOf(":");
+    if (colon < 0) {
+      if (!page) {
+        page = { name: line, size: { w: 0, h: 0 } };
+        pages.push(page);
+      } else {
+        region = { name: line, page: pages.length - 1, rotate: false, x: 0, y: 0, width: 0, height: 0,
+          origWidth: 0, origHeight: 0, offsetX: 0, offsetY: 0, index: -1 };
+        regions.push(region);
       }
       continue;
     }
-    if (line.startsWith("format:")) {
-      if (currentPage) currentPage.format = line.slice(7).trim();
-      continue;
-    }
-    if (line.startsWith("filter:")) {
-      if (currentPage) currentPage.filter = line.slice(7).trim();
-      continue;
-    }
-    if (line.startsWith("repeat:")) {
-      if (currentPage) currentPage.repeat = line.slice(7).trim();
-      continue;
-    }
-    if (line.startsWith("rotate:")) {
-      if (currentRegion) currentRegion.rotate = line.slice(7).trim() === "true";
-      continue;
-    }
-    if (line.startsWith("xy:")) {
-      const [x, y] = line.slice(3).split(",").map((s) => parseInt(s));
-      if (currentRegion) {
-        currentRegion.x = x;
-        currentRegion.y = y;
+    const key = line.slice(0, colon).trim(), value = line.slice(colon + 1).trim();
+    const nums = value.split(",").map(Number);
+    if (region) {
+      switch (key) {
+        case "bounds": [region.x, region.y, region.width, region.height] = nums; break;
+        case "offsets": [region.offsetX, region.offsetY, region.origWidth, region.origHeight] = nums; break;
+        case "xy": [region.x, region.y] = nums; break;
+        case "size": [region.width, region.height] = nums; break;
+        case "orig": [region.origWidth, region.origHeight] = nums; break;
+        case "offset": [region.offsetX, region.offsetY] = nums; break;
+        case "rotate":
+          region.degrees = value === "true" ? 90 : Number(value) || 0;
+          region.rotate = region.degrees % 180 !== 0;
+          break;
+        case "index": region.index = nums[0]; break;
       }
-      continue;
-    }
-    if (line.startsWith("orig:")) {
-      const [w, h] = line.slice(5).split(",").map((s) => parseInt(s));
-      if (currentRegion) {
-        currentRegion.origWidth = w;
-        currentRegion.origHeight = h;
-      }
-      continue;
-    }
-    if (line.startsWith("offset:")) {
-      const [x, y] = line.slice(7).split(",").map((s) => parseInt(s));
-      if (currentRegion) {
-        currentRegion.offsetX = x;
-        currentRegion.offsetY = y;
-      }
-      continue;
-    }
-    if (line.startsWith("index:")) {
-      if (currentRegion) currentRegion.index = parseInt(line.slice(6));
-      continue;
-    }
-    // 无前缀裸行：页面名（首个）或 region 名（后续）——当前 region 需先 flush
-    if (!currentPage) {
-      currentPage = { name: line, size: { w: 0, h: 0 } };
-      pages.push(currentPage);
-    } else {
-      flushRegion();
-      currentRegion = { name: line, page: 0, rotate: false, x: 0, y: 0, width: 0, height: 0, origWidth: 0, origHeight: 0, offsetX: 0, offsetY: 0, index: 0 };
+    } else if (page) {
+      if (key === "size") [page.size.w, page.size.h] = nums;
+      if (key === "pma") page.pma = value === "true";
+      if (key === "format" || key === "repeat" || key === "filter") page[key] = value;
     }
   }
-  flushRegion();
+  for (const r of regions) {
+    r.origWidth ||= r.width;
+    r.origHeight ||= r.height;
+  }
   return { pages, regions, raw: text };
+}
+
+export function unpremultiply(data: Buffer): void {
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3];
+    if (alpha === 0 || alpha === 255) continue;
+    for (let channel = i; channel < i + 3; channel++) {
+      data[channel] = Math.min(255, Math.round(data[channel] * 255 / alpha));
+    }
+  }
 }
 
 /** 查找 region（支持路径、文件名、region 子目录名匹配） */

@@ -35,6 +35,7 @@ export class AddSimpleAnimationTool extends BaseTool {
     const duration = args.duration;
     const boneName = args.boneName;
     let keyframes = 0;
+    let genName = "";
 
     const result = await modifyProject(args.projectPath, (json) => {
       // 生成动画名（避免冲突）
@@ -55,10 +56,9 @@ export class AddSimpleAnimationTool extends BaseTool {
         keyframes += updateBoneKeyframe(json, name, boneName, t, template(t, duration));
       }
       // 记录生成名到闭包外部
-      (json as any).__generatedName = name;
+      genName = name;
     });
 
-    const genName = (result as any).__generatedName ?? args.animationName ?? `${args.template}-auto`;
     return {
       success: true,
       message: `已生成动画 "${genName}"（${args.template}，${duration}s，${keyframes} 关键帧）`,

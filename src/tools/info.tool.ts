@@ -13,7 +13,7 @@ import * as path from "path";
 export class GetProjectInfoTool extends BaseTool {
   name = "spine_get_project_info";
   description =
-    "读取 .spine 项目或导出 JSON，返回结构化信息：版本/骨架名/尺寸/骨骼树/插槽/皮肤/动画/事件/纹理路径。非 3.8.75 版本附带兼容性警告。示例：{ projectPath: \"D:/proj/hero-pro.spine\" } → 返回 bones/slots/skins/animations 清单，供后续操作定位骨骼名。";
+    "读取 .spine 项目或导出 JSON，返回结构化信息：版本/骨架名/尺寸/骨骼树/插槽/皮肤/动画/事件/纹理路径。支持 Spine 3.8.x 和 4.3.x。示例：{ projectPath: \"D:/proj/hero-pro.spine\" } → 返回 bones/slots/skins/animations 清单，供后续操作定位骨骼名。";
   inputSchema = z.object({
     projectPath: z.string().describe(".spine 或 .json 文件的绝对路径"),
   });
@@ -30,9 +30,10 @@ export class GetProjectInfoTool extends BaseTool {
     }
     // .spine：导出 JSON + Info 命令合并
     const infoData = await getProjectInfo(projectPath);
-    const json = await readJsonForExport(projectPath);
+    const json = await readJsonForExport(projectPath, infoData.skeletonName);
     const info = parseProjectJson(json, {
       skeletonName: infoData.skeletonName,
+      sourceVersion: infoData.version,
       size: infoData.size,
       fps: infoData.fps,
     });

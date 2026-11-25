@@ -10,7 +10,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { cliExecutor } from "./cli-executor";
 import { logger } from "../logger";
-import { SUPPORTED_SPINE_VERSION } from "../constants";
+import { isSupportedVersion, versionWarning } from "../constants";
 import { ErrorCode, SpineError } from "../utils/error-codes";
 
 /** 版本检测结果 */
@@ -18,9 +18,9 @@ export interface VersionResult {
   version: string;
   /** 文件是否为 .json（数据文件） */
   isJson: boolean;
-  /** 是否为目标版本 3.8.75 */
+  /** 是否为支持的版本 */
   isSupported: boolean;
-  /** 若版本存在但非 3.8.75，附带友好警告 */
+  /** 若版本尚未适配，附带友好警告 */
   warning?: string;
 }
 
@@ -40,9 +40,7 @@ function versionFromInfoOutput(stdout: string): string | undefined {
   if (m) {
     return m[1];
   }
-  // 兜底：Launcher 首行 `Spine Launcher 3.8.75` 或 `Spine 3.8.75 Professional`
-  const m2 = stdout.match(/Spine(?: Launcher)?\s+([0-9]+\.[0-9]+\.[0-9]+)/i);
-  return m2 ? m2[1] : undefined;
+  return undefined;
 }
 
 class VersionValidator {
@@ -88,23 +86,16 @@ class VersionValidator {
       }
     }
 
-    const isSupported = version === SUPPORTED_SPINE_VERSION;
-    const warning = isSupported
-      ? undefined
-      : `检测到当前 Spine 项目版本为 ${version}，本服务器主要针对 ${SUPPORTED_SPINE_VERSION} 优化，部分功能（如骨骼控制、JSON 导入导出）在非 ${SUPPORTED_SPINE_VERSION} 版本上可能无法正常工作或存在未知兼容性问题。建议使用 Spine ${SUPPORTED_SPINE_VERSION} 以获得最佳体验。`;
-
-    if (warning) {
-      logger.warn(warning);
-    } else {
-      logger.info(`项目版本 ${version}，与开发基准 ${SUPPORTED_SPINE_VERSION} 一致`);
-    }
+    const isSupported = isSupportedVersion(version);
+    const warning = versionWarning(version);
+    if (warning) logger.warn(warning);
 
     return { version, isJson, isSupported, warning };
   }
 
-  /** 快速比较版本是否为 3.8.75 */
+  /** 检查支持的版本系列 */
   isSupported(version: string): boolean {
-    return version === SUPPORTED_SPINE_VERSION;
+    return isSupportedVersion(version);
   }
 }
 

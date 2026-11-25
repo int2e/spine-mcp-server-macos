@@ -2,11 +2,23 @@
  * 全局常量定义
  */
 
-/** 本服务器锁定支持的 Spine 版本（开发基准） */
-export const SUPPORTED_SPINE_VERSION = "3.8.75";
-
-/** Spine 命令行工具文件名（Windows） */
+export const LEGACY_SPINE_VERSION = "3.8.75";
+export const MAC_SPINE_VERSION = "4.3.26";
+/** Original 3.8 baseline, retained for integrations that import the old constants. */
+export const SUPPORTED_SPINE_VERSION = LEGACY_SPINE_VERSION;
 export const SPINE_EXE_NAME = "Spine.com";
+
+export function isSpine43(version: unknown): boolean {
+  return typeof version === "string" && /^4\.3\.\d+(?:-beta)?$/.test(version);
+}
+
+export function isSupportedVersion(version: unknown): boolean {
+  return isSpine43(version) || (typeof version === "string" && /^3\.8\.\d+$/.test(version));
+}
+
+export function versionWarning(version: string): string | undefined {
+  return isSupportedVersion(version) ? undefined : `Spine ${version} 尚未适配。支持 Spine 3.8.x 和 4.3.x。`;
+}
 
 /** CLI 执行默认超时（毫秒） */
 export const DEFAULT_CLI_TIMEOUT_MS = 60000;

@@ -1,6 +1,7 @@
 /**
  * 工具：spine_inspect_json — 深度分析 JSON 层级，返回树形描述
  */
+import { constraintsOf } from "../spine/format";
 import { z } from "zod";
 import { BaseTool } from "./base.tool";
 import { getBoneTree } from "../spine/json-handler";
@@ -40,9 +41,9 @@ export class InspectJsonTool extends BaseTool {
       slots: json.slots?.length ?? 0,
       skins: (json.skins ?? []).length,
       animations: Object.keys(json.animations ?? {}).length,
-      ik: (json.ik ?? []).length,
-      transform: (json.transform ?? []).length,
-      path: (json.path ?? []).length,
+      ik: constraintsOf(json, "ik").length,
+      transform: constraintsOf(json, "transform").length,
+      path: constraintsOf(json, "path").length,
       tree: treeText,
     };
     return {

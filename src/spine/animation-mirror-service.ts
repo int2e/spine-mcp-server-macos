@@ -6,6 +6,7 @@
  * - 不处理 IK/变换/路径/变形（复杂度高，镜像动作通常用不到）
  */
 import { ErrorCode, SpineError } from "../utils/error-codes";
+import { drawOrderOffsets, drawOrderSlots, uses43 } from "./format";
 import { mirrorName } from "./mirror-service";
 
 export interface MirrorAnimOptions {
@@ -37,15 +38,30 @@ export function mirrorAnimation(json: any, sourceAnim: string, options: MirrorAn
   let boneCount = 0, slotCount = 0;
   const dst = json.animations[output];
 
+  const modern = uses43(json);
+  const slotNames: string[] = (json.slots ?? []).map((s: any) => s.name);
+  const boneNames = new Set<string>((json.bones ?? []).map((b: any) => b.name));
+  const mirrorSlot = (name: string) => {
+    const other = mirrorName(name);
+    return other && (!modern || slotNames.includes(other)) ? other : name;
+  };
+
   // 骨骼时间轴
   for (const [bone, tl] of Object.entries<any>(src.bones ?? {})) {
     const mirrored = mirrorName(bone);
-    const targetBone = mirrored ?? bone;
+    const targetBone = mirrored && (!modern || boneNames.has(mirrored)) ? mirrored : bone;
     const outTl: Record<string, any> = {};
     for (const [axis, frames] of Object.entries(tl)) {
       if (!Array.isArray(frames)) continue;
       outTl[axis] = frames.map((f: any) => {
         const copy = { ...f };
+        if (modern) {
+          const negate = axis === "rotate" || axis === "translatex" || axis === "shearx";
+          if (negate && typeof copy.value === "number") copy.value = -copy.value;
+          if (Array.isArray(copy.curve) && (negate || axis === "translate" || axis === "shear")) {
+            copy.curve = copy.curve.map((v: number, i: number) => i === 1 || i === 3 ? -v : v);
+          }
+        }
         if (axis === "rotate" && typeof copy.angle === "number") copy.angle = -copy.angle;
         if (axis === "translate") {
           if (typeof copy.x === "number") copy.x = -copy.x;
@@ -61,8 +77,7 @@ export function mirrorAnimation(json: any, sourceAnim: string, options: MirrorAn
 
   // 插槽时间轴
   for (const [slot, tl] of Object.entries<any>(src.slots ?? {})) {
-    const mirrored = mirrorName(slot);
-    const targetSlot = mirrored ?? slot;
+    const targetSlot = mirrorSlot(slot);
     const outTl: Record<string, any> = {};
     for (const [axis, frames] of Object.entries(tl)) {
       if (!Array.isArray(frames)) continue;
@@ -81,11 +96,15 @@ export function mirrorAnimation(json: any, sourceAnim: string, options: MirrorAn
   }
 
   // 绘制顺序（插槽名镜像）
-  const draworder = src.draworder ?? [];
+  const orderKey = modern ? "drawOrder" : "draworder";
+  const draworder = src[orderKey] ?? [];
   if (draworder.length) {
-    dst.draworder = draworder.map((f: any) => {
-      const copy = { ...f, offsets: (f.offsets ?? []).map((o: any) => ({ ...o, slot: mirrorName(o.slot) ?? o.slot })) };
-      return copy;
+    dst[orderKey] = draworder.map((f: any) => {
+      if (!modern) return { ...f, offsets: (f.offsets ?? []).map((o: any) => ({ ...o, slot: mirrorSlot(o.slot) })) };
+      const original = drawOrderSlots(slotNames, f.offsets ?? []);
+      const reflected = [...slotNames];
+      for (let i = 0; i < original.length; i++) reflected[slotNames.indexOf(mirrorSlot(slotNames[i]))] = mirrorSlot(original[i]);
+      return { ...f, offsets: drawOrderOffsets(slotNames, reflected) };
     });
   }
 

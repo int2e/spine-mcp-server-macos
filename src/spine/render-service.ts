@@ -7,6 +7,9 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { prepareRuntime } from "./render-runtime";
+import { uses43 } from "./format";
+import { analyzeAnimation } from "./project-reader";
 import sharp from "sharp";
 import { parseAtlas, findRegion, ParsedAtlas, AtlasRegion } from "./atlas-utils";
 import { ErrorCode, SpineError } from "../utils/error-codes";
@@ -417,6 +420,10 @@ export async function renderFrameToRgba(
   const anim = json.animations?.[animName];
   if (!anim) throw new SpineError(ErrorCode.INVALID_ARGUMENT, `动画不存在：${animName}`);
 
+  if (uses43(json)) {
+    const render = await prepareRuntime(json, atlas.raw, imagePath);
+    return render({ animationName: animName, time, width, height }).rgba;
+  }
   const bones = buildBoneTree(json);
   const local = new Map<string, any>();
   for (const b of bones.values()) local.set(b.name, sampleBoneTimelines(anim, b.name, time, b));
@@ -521,12 +528,13 @@ export async function renderAnimationFrames(
   const width = options.width ?? Math.max(1, Math.ceil(skel.width ?? 256));
   const height = options.height ?? Math.max(1, Math.ceil(skel.height ?? 256));
   const fps = options.fps ?? 30;
-  const duration = anim.duration ?? 1;
+  const duration = anim.duration ?? analyzeAnimation(anim).duration;
+  const render = uses43(json) ? await prepareRuntime(json, atlas.raw, imagePath, path.dirname(atlasPath)) : undefined;
   const total = Math.max(1, Math.round(duration * fps));
   const frames: { index: number; time: number; buffer: Buffer }[] = [];
   for (let i = 0; i < total; i++) {
     const t = duration * (i / total);
-    const buf = await renderFrameToRgba(json, atlas, imagePath, animationName, t, width, height);
+    const buf = render ? render({ animationName, time: t, width, height }).rgba : await renderFrameToRgba(json, atlas, imagePath, animationName, t, width, height);
     frames.push({ index: i, time: t, buffer: buf });
   }
   return frames;

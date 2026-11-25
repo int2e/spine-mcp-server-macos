@@ -3,6 +3,7 @@
  * 仅支持非加权（non-weighted）mesh；变形为顶点偏移（Spine deform = 相对 Setup 顶点的位移）。
  * 波动沿网格局部坐标传播：axis=y 时 dy = A·sin(2π·x/λ - 2π·cycles·t/T)。
  */
+import { updateDeformKeyframe } from "./json-handler";
 import { ErrorCode, SpineError } from "../utils/error-codes";
 
 export interface WaveOptions {
@@ -65,11 +66,6 @@ export function meshWave(json: any, slotName: string, attachmentName: string, op
   }
   json.animations ??= {};
   json.animations[name] = {};
-  const deformTl = (json.animations[name].deform ??= {});
-  deformTl[skinName] ??= {};
-  deformTl[skinName][slotName] ??= {};
-  const tl = (deformTl[skinName][slotName][attachmentName] ??= []);
-
   // 3) 逐帧采样偏移
   const frames = Math.max(2, Math.round(duration * fps));
   for (let i = 0; i <= frames; i++) {
@@ -83,7 +79,7 @@ export function meshWave(json: any, slotName: string, attachmentName: string, op
       if (axis === "y") offsets[k * 2 + 1] = amplitude * wave;
       else offsets[k * 2] = amplitude * wave;
     }
-    tl.push({ time: t, offset: 0, vertices: offsets });
+    updateDeformKeyframe(json, name, skinName, slotName, attachmentName, t, offsets);
   }
 
   return { animationName: name, slotName, attachmentName, vertexCount, keyframes: frames + 1 };

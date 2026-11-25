@@ -1,110 +1,92 @@
-/**
- * 导入服务：将修改后的 JSON 导入回 .spine 项目。
- * 关键点（已实测）：使用 `-r` 参数导入；`-o` 指向目标项目文件。
- * 导入前自动备份。
- */
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID } from "crypto";
+import { configManager } from "../config-manager";
+import { isSpine43 } from "../constants";
 import { cliExecutor } from "./cli-executor";
-import { getSkeletonName } from "./info-service";
+import { getProjectInfo, getSkeletonName } from "./info-service";
 import { ImportOptions } from "../types";
 import { ErrorCode, SpineError } from "../utils/error-codes";
-import { backupFile, createTempDir, removeDir } from "../utils/file-utils";
-import { logger } from "../logger";
+import { backupFile } from "../utils/file-utils";
 
 export interface ImportResult {
-  /** 导入后的项目路径 */
   projectPath: string;
-  /** 自动备份文件路径 */
   backupPath?: string;
-  /** 使用的骨架名 */
   skeletonName: string;
 }
 
-/**
- * 将 JSON 数据导入（替换）到 .spine 项目。
- * @param projectPath 目标 .spine 项目
- * @param jsonPath    要导入的 JSON 数据文件
- * @param options     导入选项
- */
-export async function importJson(
-  projectPath: string,
-  jsonPath: string,
-  options: ImportOptions = {}
-): Promise<ImportResult> {
-  if (!fs.existsSync(jsonPath)) {
-    throw new SpineError(ErrorCode.INVALID_ARGUMENT, `要导入的 JSON 文件不存在：${jsonPath}`);
-  }
-  const targetExists = fs.existsSync(projectPath);
-  // CLI 的 -o 支持"不存在则创建"，故不强制目标存在；仅在目标存在时自动备份
-  let backupPath: string | undefined;
-  if (options.backup !== false && targetExists) {
-    backupPath = backupFile(projectPath);
-    logger.info(`已自动备份：${backupPath}`);
-  } else if (!targetExists) {
-    logger.info(`目标项目不存在，将创建新项目：${projectPath}`);
-  }
-
-  // 骨架名：未提供时从 Info 命令获取（目标不存在则必须显式指定）
-  let skeletonName = options.skeletonName;
-  if (!skeletonName) {
-    if (!targetExists) {
-      throw new SpineError(
-        ErrorCode.INVALID_ARGUMENT,
-        `目标项目不存在且未指定骨架名：${projectPath}`,
-        "创建新项目时必须传入 skeletonName 参数。"
-      );
-    }
-    skeletonName = await getSkeletonName(projectPath);
-  }
-  logger.debug(`导入骨架 "${skeletonName}" 到 ${projectPath}`);
-
-  await cliExecutor.exec({ args: ["-i", jsonPath, "-o", projectPath, "-r", skeletonName] });
-
-  return { projectPath, backupPath, skeletonName };
+/** Detect edits made while the export, mutation and import were running. */
+export function projectRevision(projectPath: string): string | undefined {
+  const st = fs.statSync(projectPath, { bigint: true, throwIfNoEntry: false });
+  return st && `${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
 }
 
-/**
- * 原地替换导入（Round-Trip 专用，已实测验证）：
- * 导入 JSON 到**临时新项目文件**，再原子替换原项目。
- * 直接 `-o` 指向已存在项目会丢失修改，故必须先导入到新文件。
- * @param projectPath  目标 .spine 项目（必须存在）
- * @param jsonPath     修改后的 JSON
- * @param skeletonName 骨架名（不填自动获取）
- */
-export async function importJsonInPlace(
-  projectPath: string,
-  jsonPath: string,
-  skeletonName?: string
+async function editorVersion(): Promise<string> {
+  const pinned = configManager.get().spineVersion;
+  if (pinned) return pinned;
+  const output = await cliExecutor.execToString(["--version"]);
+  const match = output.match(/^Spine (\d+\.\d+\.\d+(?:-beta)?)(?:\s|$)/im)
+    ?? output.match(/^Spine Launcher (3\.8\.\d+)(?:\s|$)/im);
+  if (!match) throw new SpineError(ErrorCode.CLI_EXEC_FAILED, "无法识别编辑器版本，请设置 SPINE_VERSION。");
+  return match[1];
+}
+
+export async function importJson(
+  projectPath: string, jsonPath: string, options: ImportOptions = {},
+  roundTrip?: { revision: string; animationNames?: string[] },
 ): Promise<ImportResult> {
-  if (!fs.existsSync(projectPath)) {
-    throw new SpineError(ErrorCode.INVALID_ARGUMENT, `目标项目文件不存在：${projectPath}`);
-  }
-  if (!fs.existsSync(jsonPath)) {
-    throw new SpineError(ErrorCode.INVALID_ARGUMENT, `要导入的 JSON 文件不存在：${jsonPath}`);
-  }
-
-  // 1. 自动备份
-  const backupPath = backupFile(projectPath);
-  logger.info(`已自动备份：${backupPath}`);
-
-  // 2. 骨架名
-  const name = skeletonName ?? (await getSkeletonName(projectPath));
-
-  // 3. 导入到临时新项目文件
-  const tempDir = createTempDir("spine-inplace-");
-  const tempProject = path.join(tempDir, path.basename(projectPath));
-  try {
-    await cliExecutor.exec({ args: ["-i", jsonPath, "-o", tempProject, "-r", name] });
-    if (!fs.existsSync(tempProject)) {
-      throw new SpineError(ErrorCode.CLI_EXEC_FAILED, "导入生成的新项目文件不存在，导入可能失败。");
+  if (!fs.existsSync(jsonPath)) throw new SpineError(ErrorCode.INVALID_ARGUMENT, `文件不存在：${jsonPath}`);
+  const expectedRevision = roundTrip?.revision ?? projectRevision(projectPath);
+  const animationNames = roundTrip?.animationNames;
+  const exists = expectedRevision !== undefined;
+  const name = options.skeletonName ?? (exists ? await getSkeletonName(projectPath) : undefined);
+  if (!name) throw new SpineError(ErrorCode.INVALID_ARGUMENT, "创建项目时请提供 skeletonName。");
+  const version = await editorVersion();
+  const modern = isSpine43(version);
+  if (exists) {
+    const info = await getProjectInfo(projectPath);
+    if (info.version.split(".").slice(0, 2).join(".") !== version.split(".").slice(0, 2).join(".")) {
+      throw new SpineError(ErrorCode.INVALID_ARGUMENT, `工程版本 ${info.version} 与编辑器 ${version} 不匹配，请指定 SPINE_VERSION=${info.version}。`);
     }
-    // 4. 原子替换原项目
-    fs.copyFileSync(tempProject, projectPath);
-    logger.info(`已用导入结果替换原项目：${projectPath}`);
-  } finally {
-    removeDir(tempDir);
   }
+  // Stage beside the destination so relative image/audio paths and the filesystem stay the same.
+  const staged = path.join(path.dirname(projectPath), `.spine-mcp-${randomUUID()}.spine`);
+  try {
+    // A 3.8 round-trip needs a new output file. A normal import needs the existing project.
+    if (exists && (modern || !roundTrip)) fs.copyFileSync(projectPath, staged, fs.constants.COPYFILE_EXCL);
+    const args = ["-i", jsonPath, "-o", staged];
+    if (modern) {
+      args.push("--to", name);
+      for (const animation of animationNames ?? []) args.push("-a", animation);
+      if (exists) args.push("--replace");
+      args.push("-r");
+    } else {
+      args.push("-r", name);
+    }
+    const run = await cliExecutor.exec({ args });
+    if (modern && animationNames) {
+      const imported = new Set([...run.stdout.matchAll(/^Imported animation:\s*(.+)$/gmi)].map(m => m[1].trim()));
+      const warning = (run.stdout + "\n" + run.stderr).split(/\r?\n/).find(line => /^\s*WARN(?:ING)?[: ]/i.test(line));
+      if (warning || animationNames.some(animation => !imported.has(animation))) {
+        throw new SpineError(ErrorCode.CLI_EXEC_FAILED, warning ?? "Spine 未确认导入所请求的动画。");
+      }
+    }
+    if (!fs.statSync(staged, { throwIfNoEntry: false })?.size) {
+      throw new SpineError(ErrorCode.CLI_EXEC_FAILED, "Spine 没有生成导入后的项目。");
+    }
+    if (projectRevision(projectPath) !== expectedRevision) {
+      throw new SpineError(ErrorCode.INVALID_ARGUMENT, "工程在操作期间已修改，请重新读取后重试。");
+    }
+    const backupPath = exists && options.backup !== false ? backupFile(projectPath) : undefined;
+    fs.renameSync(staged, projectPath);
+    return { projectPath, backupPath, skeletonName: name };
+  } finally {
+    fs.rmSync(staged, { force: true });
+  }
+}
 
-  return { projectPath, backupPath, skeletonName: name };
+export async function importJsonInPlace(projectPath: string, jsonPath: string, skeletonName?: string): Promise<ImportResult> {
+  const revision = projectRevision(projectPath);
+  if (revision === undefined) throw new SpineError(ErrorCode.INVALID_ARGUMENT, `目标项目不存在：${projectPath}`);
+  return importJson(projectPath, jsonPath, { skeletonName }, { revision });
 }

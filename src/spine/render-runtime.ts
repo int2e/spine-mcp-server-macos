@@ -11,6 +11,9 @@ declare const require: any;
 
 import * as fs from "fs";
 import * as path from "path";
+import sharp from "sharp";
+import { unpremultiply } from "./atlas-utils";
+import { uses43 } from "./format";
 
 let spine: any = null;
 let canvasMod: any = null;
@@ -80,78 +83,92 @@ export interface RuntimeFrameResult {
   time: number;
 }
 
-/** 用官方 runtime 渲染动画指定时间点，返回 RGBA 帧数据 */
-export async function renderRuntimeFrame(opts: RuntimeFrameOptions): Promise<RuntimeFrameResult> {
-  const spineMod = getSpine();
+/** Canvas expects straight RGBA. Spine packs can contain premultiplied atlas pages. */
+async function pageImage(canvas: any, file: string, pma: boolean): Promise<any> {
+  if (!pma) return loadImage(canvas, fs.readFileSync(file));
+  const { data, info } = await sharp(file).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  unpremultiply(data);
+  const page = canvas.createCanvas(info.width, info.height);
+  const ctx = page.getContext("2d");
+  const pixels = ctx.createImageData(info.width, info.height);
+  pixels.data.set(data);
+  ctx.putImageData(pixels, 0, 0);
+  return page;
+}
+
+/** Decode atlas pages once per render request, including a sequence or a video. */
+export async function prepareRuntime(json: any, atlasText: string, imagePath: string, atlasDir = path.dirname(imagePath)) {
+  const modern = uses43(json);
+  const runtime: any = modern ? await import("@esotericsoftware/spine-canvas") : getSpine();
+  const rendererModule = modern ? runtime : runtime.canvas;
   const canvas = getCanvas();
-  const json = JSON.parse(fs.readFileSync(opts.skeletonJsonPath, "utf8"));
-  const atlasText = fs.readFileSync(opts.atlasPath, "utf8");
-  const img = await loadImage(canvas, fs.readFileSync(opts.imagePath));
-
-  const texture = new spineMod.canvas.CanvasTexture(img);
-  const atlas = new spineMod.TextureAtlas(atlasText, () => texture);
-  const loader = new spineMod.AtlasAttachmentLoader(atlas);
-  const skeletonJson = new spineMod.SkeletonJson(loader);
-  const skeletonData = skeletonJson.readSkeletonData(json);
-  const skeleton = new spineMod.Skeleton(skeletonData);
-  const state = new spineMod.AnimationState(new spineMod.AnimationStateData(skeletonData));
-  const animName = opts.animationName || (skeletonData.animations.length ? skeletonData.animations[0].name : "");
-  const time = opts.time ?? 0;
-  if (animName) state.setAnimation(0, animName, false);
-  state.update(time);
-  state.apply(skeleton);
-  skeleton.updateWorldTransform();
-
-  // 计算包围盒以自动缩放居中
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const b of skeleton.bones) {
-    if (b.worldX < minX) minX = b.worldX;
-    if (b.worldX > maxX) maxX = b.worldX;
-    if (b.worldY < minY) minY = b.worldY;
-    if (b.worldY > maxY) maxY = b.worldY;
+  let atlas;
+  if (modern) {
+    atlas = new runtime.TextureAtlas(atlasText);
+    for (const [i, page] of atlas.pages.entries()) {
+      const file = i === 0 ? imagePath : path.join(atlasDir, page.name);
+      page.setTexture(new rendererModule.CanvasTexture(await pageImage(canvas, file, page.pma)));
+    }
+  } else {
+    const texture = new rendererModule.CanvasTexture(await loadImage(canvas, fs.readFileSync(imagePath)));
+    atlas = new runtime.TextureAtlas(atlasText, () => texture);
   }
-
-  const W = opts.width || 512;
-  const H = opts.height || 512;
-  const c = canvas.createCanvas(W, H);
-  const ctx = c.getContext("2d");
-  // 保持透明背景（与自研渲染器一致，便于游戏内叠加/合成）
-  const bw = Math.max(maxX - minX, 1);
-  const bh = Math.max(maxY - minY, 1);
-  const scale = Math.min((W * 0.8) / bw, (H * 0.8) / bh);
-  ctx.translate(W / 2, H / 2);
-  ctx.scale(scale, -scale);
-  ctx.translate(-(minX + maxX) / 2, -(minY + maxY) / 2);
-  const renderer = new spineMod.canvas.SkeletonRenderer(ctx);
-  renderer.draw(skeleton);
-
-  // 叠加骨骼线框 + 关节点（世界坐标已在当前 ctx 变换空间中）
-  if (opts.wireframe) {
-    ctx.strokeStyle = "rgba(255,90,60,0.95)";
-    ctx.lineWidth = 1.5 / scale;
-    ctx.fillStyle = "rgba(120,200,255,0.95)";
-    for (const b of skeleton.bones) {
-      if (b.parent) {
-        ctx.beginPath();
-        ctx.moveTo(b.parent.worldX, b.parent.worldY);
-        ctx.lineTo(b.worldX, b.worldY);
-        ctx.stroke();
+  const reader = new runtime.SkeletonJson(new runtime.AtlasAttachmentLoader(atlas));
+  const data = reader.readSkeletonData(json);
+  return (opts: Pick<RuntimeFrameOptions, "time" | "width" | "height" | "animationName" | "wireframe">): RuntimeFrameResult => {
+    const skeleton = new runtime.Skeleton(data);
+    const state = new runtime.AnimationState(new runtime.AnimationStateData(data));
+    const animationName = opts.animationName ?? data.animations[0]?.name ?? "";
+    const time = opts.time ?? 0;
+    if (animationName) state.setAnimation(0, animationName, false);
+    state.update(time);
+    state.apply(skeleton);
+    if (modern) skeleton.update(time);
+    skeleton.updateWorldTransform(modern ? runtime.Physics.update : undefined);
+    const pose = (bone: any) => modern ? bone.appliedPose : bone;
+    const bones = skeleton.bones.map(pose);
+    let minX = Math.min(...bones.map((b: any) => b.worldX)), maxX = Math.max(...bones.map((b: any) => b.worldX));
+    let minY = Math.min(...bones.map((b: any) => b.worldY)), maxY = Math.max(...bones.map((b: any) => b.worldY));
+    if (modern) {
+      const bounds = skeleton.getBoundsRect();
+      if (Number.isFinite(bounds.width) && bounds.width > 0) {
+        minX = bounds.x; minY = bounds.y; maxX = minX + bounds.width; maxY = minY + bounds.height;
       }
     }
-    for (const b of skeleton.bones) {
-      ctx.beginPath();
-      ctx.arc(b.worldX, b.worldY, 3.5 / scale, 0, Math.PI * 2);
-      ctx.fill();
+    const width = opts.width || 512, height = opts.height || 512;
+    const ctx = canvas.createCanvas(width, height).getContext("2d");
+    const scale = Math.min(width * 0.8 / Math.max(1, maxX - minX), height * 0.8 / Math.max(1, maxY - minY));
+    ctx.translate(width / 2, height / 2);
+    ctx.scale(scale, -scale);
+    ctx.translate(-(minX + maxX) / 2, -(minY + maxY) / 2);
+    const renderer = new rendererModule.SkeletonRenderer(ctx);
+    if (modern) renderer.triangleRendering = true;
+    renderer.draw(skeleton);
+    if (opts.wireframe) {
+      ctx.strokeStyle = "rgba(255,90,60,0.95)";
+      ctx.lineWidth = 1.5 / scale;
+      ctx.fillStyle = "rgba(120,200,255,0.95)";
+      for (const bone of skeleton.bones) {
+        const b = pose(bone);
+        if (bone.parent) {
+          ctx.beginPath();
+          ctx.moveTo(pose(bone.parent).worldX, pose(bone.parent).worldY);
+          ctx.lineTo(b.worldX, b.worldY);
+          ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.arc(b.worldX, b.worldY, 3.5 / scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
-  }
-
-  return {
-    width: W,
-    height: H,
-    rgba: Buffer.from(ctx.getImageData(0, 0, W, H).data),
-    animationName: animName,
-    time,
+    return { width, height, rgba: Buffer.from(ctx.getImageData(0, 0, width, height).data), animationName, time };
   };
+}
+
+export async function renderRuntimeFrame(opts: RuntimeFrameOptions): Promise<RuntimeFrameResult> {
+  const json = JSON.parse(fs.readFileSync(opts.skeletonJsonPath, "utf8"));
+  const render = await prepareRuntime(json, fs.readFileSync(opts.atlasPath, "utf8"), opts.imagePath, path.dirname(opts.atlasPath));
+  return render(opts);
 }
 
 /** 渲染单帧并写入 PNG 文件 */

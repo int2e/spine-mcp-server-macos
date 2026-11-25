@@ -59,12 +59,12 @@ const template = `
     <div class="sm-section-title">⚙️ 基本配置</div>
     <div class="sm-field">
       <label>Spine 路径</label>
-      <input id="sm-spine" class="sm-input" placeholder="D:/cocos/SpinePro3.8.75/Spine.com" />
+      <input id="sm-spine" class="sm-input" placeholder="Spine.app / Spine.com" />
       <button id="sm-browse-spine" class="sm-btn">浏览</button>
     </div>
     <div class="sm-field">
       <label>Server 路径</label>
-      <input id="sm-server" class="sm-input" placeholder="D:/cocos/spine-mcp-server" />
+      <input id="sm-server" class="sm-input" placeholder="spine-mcp-server" />
       <button id="sm-browse-server" class="sm-btn">浏览</button>
     </div>
     <div class="sm-field">

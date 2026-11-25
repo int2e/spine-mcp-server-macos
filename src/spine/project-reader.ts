@@ -5,7 +5,7 @@
 import * as fs from "fs";
 import { BoneInfo, SlotInfo, SkinInfo, AnimationInfo, SpineProjectInfo } from "../types";
 import { ErrorCode, SpineError } from "../utils/error-codes";
-import { SUPPORTED_SPINE_VERSION } from "../constants";
+import { versionWarning } from "../constants";
 
 /** 将原始 bone 对象映射为 BoneInfo */
 function mapBone(raw: any): BoneInfo {
@@ -20,7 +20,7 @@ function mapBone(raw: any): BoneInfo {
     scaleY: raw.scaleY ?? 1,
     shearX: raw.shearX ?? 0,
     shearY: raw.shearY ?? 0,
-    transform: raw.transform,
+    transform: raw.inherit ?? raw.transform,
     color: raw.color,
   };
 }
@@ -42,7 +42,7 @@ export function buildBoneTree(bones: BoneInfo[]): BoneInfo[] {
 }
 
 /** 计算动画时长与关键帧总数 */
-function analyzeAnimation(anim: any): { duration: number; keyframeCount: number } {
+export function analyzeAnimation(anim: any): { duration: number; keyframeCount: number } {
   let duration = 0;
   let keyframeCount = 0;
   if (!anim || typeof anim !== "object") {
@@ -78,12 +78,13 @@ function analyzeAnimation(anim: any): { duration: number; keyframeCount: number 
  */
 export function parseProjectJson(
   json: any,
-  extra: { skeletonName?: string; size?: { width: number; height: number }; fps?: number } = {}
+  extra: { skeletonName?: string; sourceVersion?: string; size?: { width: number; height: number }; fps?: number } = {}
 ): SpineProjectInfo {
   if (!json || typeof json !== "object") {
     throw new SpineError(ErrorCode.JSON_PARSE, "无效的 Spine JSON：内容不是对象。");
   }
-  const version = json.skeleton?.spine ?? "unknown";
+  const exportVersion = json.skeleton?.spine;
+  const version = extra.sourceVersion || exportVersion || "unknown";
 
   const bones: BoneInfo[] = (json.bones ?? []).map(mapBone);
 
@@ -126,13 +127,11 @@ export function parseProjectJson(
   const events: string[] = Object.keys(json.events ?? {});
   const images = json.skeleton?.images;
 
-  const isSupported = version === SUPPORTED_SPINE_VERSION;
-  const compatibilityWarning = isSupported
-    ? undefined
-    : `检测到当前 Spine 项目版本为 ${version}，本服务器主要针对 ${SUPPORTED_SPINE_VERSION} 优化，部分功能在非 ${SUPPORTED_SPINE_VERSION} 版本上可能无法正常工作。`;
+  const compatibilityWarning = versionWarning(version);
 
   return {
     version,
+    ...(exportVersion && exportVersion !== version ? { exportVersion } : {}),
     skeletonName: extra.skeletonName,
     bones,
     slots,
@@ -141,7 +140,7 @@ export function parseProjectJson(
     events,
     images,
     size: extra.size,
-    fps: extra.fps,
+    fps: extra.fps ?? json.skeleton?.fps,
     compatibilityWarning,
   };
 }

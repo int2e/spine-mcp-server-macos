@@ -4,6 +4,7 @@
  */
 import { ErrorCode, SpineError } from "../utils/error-codes";
 import { updateBoneKeyframe } from "./json-handler";
+import { uses43 } from "./format";
 import { applyEaseCurves } from "./animation-generate-service";
 
 export interface MixOptions {
@@ -37,8 +38,39 @@ function sampleTimeline(frames: any[], time: number, def: number): number {
   return v0 + (v1 - v0) * k;
 }
 
-function sampleBone(anim: any, bone: any, time: number): Sample {
+/** 4.3 timelines store setup-relative values and absolute Bezier handles per channel. */
+function sampleChannel(tl: any, type: string, axis: "x" | "y" | undefined, time: number, fallback: number): number {
+  const split = axis && tl[type + axis];
+  const frames: any[] | undefined = split || tl[type];
+  if (!frames?.length || time < (frames[0].time ?? 0)) return fallback;
+  const key = split || !axis ? "value" : axis;
+  const end = frames.findIndex(f => (f.time ?? 0) > time);
+  const prev = frames[end < 0 ? frames.length - 1 : end - 1];
+  const from = prev[key] ?? fallback;
+  if (end < 0 || prev.curve === "stepped") return from;
+  const next = frames[end], to = next[key] ?? fallback;
+  const t0 = prev.time ?? 0, t1 = next.time;
+  if (!Array.isArray(prev.curve)) return from + (to - from) * (time - t0) / (t1 - t0);
+  const i = key === "y" ? 4 : 0;
+  const [cx1, cy1, cx2, cy2] = prev.curve.slice(i, i + 4);
+  const cubic = (a: number, b: number, c: number, d: number, t: number) =>
+    (1-t)**3 * a + 3*(1-t)**2*t*b + 3*(1-t)*t*t*c + t**3*d;
+  let low = 0, high = 1;
+  for (let step = 0; step < 20; step++) {
+    const mid = (low + high) / 2;
+    if (cubic(t0, cx1, cx2, t1, mid) < time) low = mid; else high = mid;
+  }
+  return cubic(from, cy1, cy2, to, (low + high) / 2);
+}
+
+function sampleBone(anim: any, bone: any, time: number, modern: boolean): Sample {
   const tl = anim?.bones?.[bone.name] ?? {};
+  if (modern) return {
+    x: sampleChannel(tl, "translate", "x", time, 0), y: sampleChannel(tl, "translate", "y", time, 0),
+    rotation: sampleChannel(tl, "rotate", undefined, time, 0),
+    scaleX: sampleChannel(tl, "scale", "x", time, 1), scaleY: sampleChannel(tl, "scale", "y", time, 1),
+    shearX: sampleChannel(tl, "shear", "x", time, 0), shearY: sampleChannel(tl, "shear", "y", time, 0),
+  };
   return {
     x: sampleTimeline(tl.translate, time, bone.x ?? 0),
     y: sampleTimeline(tl.translate, time, bone.y ?? 0),
@@ -70,6 +102,7 @@ export function mixAnimations(json: any, fromName: string, toName: string, optio
   json.animations[output] = {};
 
   const bones = json.bones ?? [];
+  const modern = uses43(json);
   const frames = Math.max(2, Math.round(duration * fps));
   let keyframes = 0;
   let boneCount = 0;
@@ -78,8 +111,8 @@ export function mixAnimations(json: any, fromName: string, toName: string, optio
     for (let i = 0; i <= frames; i++) {
       const t = (i / frames) * duration;
       const k = i / frames;
-      const a = sampleBone(from, bone, t);
-      const b = sampleBone(to, bone, t);
+      const a = sampleBone(from, bone, t, modern);
+      const b = sampleBone(to, bone, t, modern);
       const blend = {
         rotation: a.rotation * (1 - k) + b.rotation * k,
         x: a.x * (1 - k) + b.x * k,
@@ -94,7 +127,7 @@ export function mixAnimations(json: any, fromName: string, toName: string, optio
     if (wrote > 0) boneCount++;
     keyframes += wrote;
   }
-  const curves = applyEaseCurves(json.animations[output]);
+  const curves = applyEaseCurves(json.animations[output], uses43(json));
 
   return { animationName: output, from: fromName, to: toName, duration, bones: boneCount, keyframes };
 }

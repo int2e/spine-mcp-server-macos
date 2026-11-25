@@ -15,6 +15,7 @@
  *   }
  * }
  */
+import { newSkeletonVersion } from "../config-manager";
 import * as fs from "fs";
 import * as path from "path";
 import sharp from "sharp";
@@ -152,7 +153,7 @@ export async function assembleParts(
   }
 
   const skeletonJson = {
-    skeleton: { spine: "3.8.75", images: imageDir },
+    skeleton: { spine: newSkeletonVersion(), images: imageDir },
     bones,
     slots,
     skins: [{ name: "default", attachments }],

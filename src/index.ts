@@ -5,7 +5,7 @@
  * 子命令（Phase 2 自测用；MCP 服务器将在 Phase 3 接入）：
  *   check                       —— 校验 Spine CLI 并显示配置摘要
  *   info <path>                 —— 对项目执行 Info 命令并显示输出
- *   version <path>              —— 检测项目版本（3.8.75 兼容提示）
+ *   version <path>              —— 检测项目版本（版本兼容提示）
  *   reader <json>               —— 解析导出 JSON，显示结构化项目信息
  *   export <spine> <outdir> [json|binary|texture|video]
  *                               —— 测试导出
@@ -22,16 +22,17 @@ import { cliExecutor } from "./spine/cli-executor";
 import { versionValidator } from "./spine/version-validator";
 import { getProjectInfo } from "./spine/info-service";
 import { readProjectJson } from "./spine/project-reader";
-import { exportProject, generateExportSettings } from "./spine/export-service";
-import { importJson, importJsonInPlace } from "./spine/import-service";
+import { exportProject } from "./spine/export-service";
+import { modifyProject, readJsonForExport } from "./spine/modify-service";
+import { importJson } from "./spine/import-service";
 import { cleanProject } from "./spine/cleanup-service";
-import { updateBoneKeyframe, frameToTime } from "./spine/json-handler";
+import { findBone, updateBoneKeyframe } from "./spine/json-handler";
 import { toSpineError } from "./utils/error-codes";
-import { createTempDir, removeDir, readJsonFile, writeJsonFile, ensureDir } from "./utils/file-utils";
+import { createTempDir, removeDir, ensureDir } from "./utils/file-utils";
 import { startMcpServer } from "./server";
 
 const HELP_TEXT = `
-spine-mcp-server — Spine 3.8.75 MCP 服务器（Phase 1 + Phase 2）
+spine-mcp-server — Spine 3.8.x / 4.3.x MCP 服务器
 
 用法:
   node dist/index.js <command> [args]
@@ -50,6 +51,7 @@ spine-mcp-server — Spine 3.8.75 MCP 服务器（Phase 1 + Phase 2）
 
 环境变量（见 .env.example）:
   SPINE_EXE            Spine 命令行工具路径
+  SPINE_VERSION        固定编辑器版本，例如 4.3.26
   LOG_LEVEL            error|warn|info|debug
   CLI_TIMEOUT_MS       CLI 执行超时（毫秒）
 `;
@@ -81,7 +83,7 @@ async function cmdVersion(filePath: string): Promise<void> {
   const result = await versionValidator.detect(filePath);
   console.log(`文件     : ${filePath}`);
   console.log(`版本     : ${result.version}`);
-  console.log(`目标版本 : ${result.isSupported ? "✅ 与 3.8.75 一致" : "❌ 非 3.8.75"}`);
+  console.log(`目标版本 : ${result.isSupported ? "支持" : "尚未适配"}`);
   if (result.warning) {
     console.log(`警告     : ${result.warning}`);
   }
@@ -104,7 +106,6 @@ async function cmdReader(jsonPath: string): Promise<void> {
 /** export 命令：测试导出 */
 async function cmdExport(spinePath: string, outDir: string, format: string): Promise<void> {
   ensureDir(outDir);
-  console.log(`导出设置 : ${JSON.stringify(generateExportSettings({ format: format as any }))}`);
   const files = await exportProject(spinePath, outDir, { format: format as any });
   console.log(`导出完成 : ${files.length} 个文件`);
   files.forEach((f) => console.log(`  - ${f}`));
@@ -140,63 +141,28 @@ async function cmdClean(spinePath: string): Promise<void> {
 async function cmdRoundtrip(spinePath: string, outDir: string): Promise<void> {
   const fs = require("fs");
   const path = require("path");
-  ensureDir(outDir);
-
-  const tempDir = createTempDir("spine-rt-");
-  // 0. 在临时副本上执行，保护原始文件
-  const workProj = path.join(tempDir, path.basename(spinePath));
-  fs.copyFileSync(spinePath, workProj);
-
-  // 1. 导出 JSON
-  const exportDir = path.join(tempDir, "export");
-  const files = await exportProject(workProj, exportDir, { format: "json" });
-  const jsonFile = files.find((f) => f.endsWith(".json"));
-  if (!jsonFile) {
-    throw new Error("导出未产生 JSON 文件");
+  const tempDir = fs.mkdtempSync(path.join(ensureDir(outDir), ".spine-roundtrip-"));
+  try {
+    const copy = path.join(tempDir, path.basename(spinePath));
+    fs.copyFileSync(spinePath, copy);
+    const info = await getProjectInfo(copy);
+    const animation = info.animations[0], bone = info.bones[0];
+    if (!animation || !bone) throw new Error("验证往返需要至少一个动画和一根骨骼。");
+    let expected = 0;
+    await modifyProject(copy, json => {
+      expected = (findBone(json, bone)?.rotation ?? 0) + 10;
+      updateBoneKeyframe(json, animation, bone, 0, { rotation: expected });
+    });
+    const data = await readJsonForExport(copy, info.skeletonName);
+    const frames = data.animations?.[animation]?.bones?.[bone]?.rotate ?? [];
+    const first = frames.find((frame: any) => (frame.time ?? 0) === 0);
+    if (!first || Math.abs((first.value ?? first.angle ?? 0) - expected) > 1e-5) {
+      throw new Error(`动画 ${animation} 骨骼 ${bone} 的第 0 帧回读失败。`);
+    }
+    console.log(`回读成功：${animation} / ${bone} 第 0 帧旋转 ${expected}°`);
+  } finally {
+    removeDir(tempDir);
   }
-  console.log(`1) 导出   : ${jsonFile}`);
-
-  // 2. 获取骨架名与 fps
-  const info = await getProjectInfo(workProj);
-  const fps = info.fps || 30;
-  console.log(`2) 骨架   : ${info.skeletonName}  fps=${fps}  骨骼=${info.bones.length}`);
-
-  // 3. 修改骨骼关键帧（第一个动画的第一个骨骼，rotation + 10）
-  const json = readJsonFile(jsonFile);
-  const animName = info.animations[0];
-  const boneName = info.bones[0];
-  const time = frameToTime(0, fps);
-  const baseRotation = findBoneSafe(json, boneName).rotation ?? 0;
-  const affected = updateBoneKeyframe(json, animName, boneName, time, { rotation: baseRotation + 10 });
-  writeJsonFile(jsonFile, json);
-  console.log(`3) 修改   : 动画 "${animName}" 骨骼 "${boneName}" 第 0 帧 rotation+10（影响 ${affected} 帧）`);
-
-  // 4. 原地导入（临时新文件 + 原子替换，已验证正确保留修改）
-  const imp = await importJsonInPlace(workProj, jsonFile, info.skeletonName);
-  console.log(`4) 导入   : ${imp.projectPath}（备份: ${path.basename(imp.backupPath ?? "")}）`);
-
-  // 5. 验证：重新导出导入后的项目，检查关键帧是否保留
-  const verifyDir = path.join(tempDir, "verify");
-  const verifyFiles = await exportProject(workProj, verifyDir, { format: "json" });
-  const verifyJson = verifyFiles.find((f) => f.endsWith(".json"));
-  if (!verifyJson) {
-    throw new Error("验证导出未产生 JSON 文件");
-  }
-  const vData = readJsonFile(verifyJson);
-  const vBone = findBoneSafe(vData, boneName);
-  const timeline = vData.animations?.[animName]?.bones?.[boneName]?.rotate ?? [];
-  // Spine 导出时 time=0 的关键帧会省略 time 字段，视为 0
-  const frame0 = timeline.find((f: any) => Math.abs((f?.time ?? 0) - 0) < 1e-6);
-  const expected = baseRotation + 10;
-  console.log(`5) 验证   : 第 0 帧 angle = ${frame0?.angle}（期望 ${expected}，Setup rotation = ${vBone.rotation}）`);
-  console.log(frame0 && Math.abs((frame0.angle ?? 0) - expected) < 1e-6 ? `   ✅ 关键帧写入成功并回读一致` : `   ❌ 关键帧验证失败`);
-
-  removeDir(tempDir);
-}
-
-/** 安全读取骨骼（不存在返回空对象） */
-function findBoneSafe(json: any, name: string): any {
-  return (json.bones ?? []).find((b: any) => b.name === name) ?? {};
 }
 
 async function main(): Promise<void> {

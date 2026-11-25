@@ -4,6 +4,7 @@
  * - 布局：grid（网格排布避免重叠，默认）或 list（纵向单列）
  * - 可选 partsIndex.json 指定每个部件的骨骼名（作为骨骼命名依据）
  */
+import { newSkeletonVersion } from "../config-manager";
 import * as fs from "fs";
 import * as path from "path";
 import sharp from "sharp";
@@ -89,7 +90,7 @@ export async function buildSkeleton(partsDir: string, outputJsonPath: string, op
   });
 
   const skeletonJson = {
-    skeleton: { spine: "3.8.75", images: imageDir },
+    skeleton: { spine: newSkeletonVersion(), images: imageDir },
     bones,
     slots,
     skins: [{ name: "default", attachments }],

@@ -12,8 +12,8 @@ const path = require('path');
 const fs = require('fs');
 
 const DEFAULT_CONFIG = {
-  serverPath: 'D:/cocos/spine-mcp-server',
-  spineExe: 'D:/cocos/SpinePro3.8.75/Spine.com',
+  serverPath: process.platform === 'darwin' ? path.resolve(__dirname, '..') : 'D:/cocos/spine-mcp-server',
+  spineExe: process.env.SPINE_EXE || (process.platform === 'darwin' ? '/Applications/Spine.app/Contents/MacOS/Spine' : 'D:/cocos/SpinePro3.8.75/Spine.com'),
   workspace: '',
   logLevel: 'info',
 };
@@ -63,6 +63,9 @@ function resolveSpineExe(spineExe) {
 function resolveNode() {
   if (process.env.SPINE_MCP_NODE && fs.existsSync(process.env.SPINE_MCP_NODE)) {
     return process.env.SPINE_MCP_NODE;
+  }
+  if (process.platform === 'darwin') {
+    for (const bin of ['/opt/homebrew/bin/node', '/usr/local/bin/node']) if (fs.existsSync(bin)) return bin;
   }
   return 'node';
 }
@@ -365,7 +368,7 @@ const methods = {
       config: {
         mcpServers: {
           'spine-mcp': {
-            command: 'node',
+            command: resolveNode(),
             args: [path.join(serverPath, 'dist', 'index.js'), 'mcp'],
             env: { SPINE_EXE: cfg.spineExe },
           },

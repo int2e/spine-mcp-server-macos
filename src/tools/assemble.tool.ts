@@ -9,7 +9,7 @@ import { importJson } from "../spine/import-service";
 export class AssembleTool extends BaseTool {
   name = "spine_assemble";
   description =
-    "读取 spine_cut_parts 输出的 partsMeta.json + AI 装配索引（partsIndex.json），生成 Spine 3.8 层级骨架 JSON 与拼接还原预览图，可选直接导入 .spine 项目。装配索引格式：{ parts: { 'part-N': { name, parent, x, y, pivotX?, pivotY?, order? } } }。";
+    "读取 spine_cut_parts 输出的 partsMeta.json + AI 装配索引（partsIndex.json），生成 Spine 层级骨架 JSON 与拼接还原预览图，可选直接导入 .spine 项目。装配索引格式：{ parts: { 'part-N': { name, parent, x, y, pivotX?, pivotY?, order? } } }。";
   inputSchema = z.object({
     partsMetaPath: z.string().describe("spine_cut_parts 输出的 partsMeta.json 路径"),
     assembleIndexPath: z.string().describe("AI 装配索引 JSON 路径（{ parts: { 'part-N': { name, parent, x, y, pivotX?, pivotY?, order? } } }）"),
@@ -28,7 +28,6 @@ export class AssembleTool extends BaseTool {
     if (args.importToProject) {
       importResult = await importJson(args.importToProject, args.outputJsonPath, {
         skeletonName: args.skeletonName,
-        backup: false,
       });
     }
     return {

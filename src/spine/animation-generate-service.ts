@@ -5,6 +5,7 @@
  * - 一次性模板(attack/jump) 用姿势关键帧插值
  * - 骨骼按名称自动匹配角色（支持 _l/_r/left/right/数字1/2 惯例），可用 roleMap 显式指定
  */
+import { setBezier, uses43 } from "./format";
 import { ErrorCode, SpineError } from "../utils/error-codes";
 import { updateBoneKeyframe } from "./json-handler";
 
@@ -48,10 +49,10 @@ const bob = (amp: number, phase = 0): ((t: number) => number) => (t) => -Math.ab
 const pos = (amp: number, phase = 0): ((t: number) => number) => (t) => Math.max(0, Math.sin(TAU * t + phase)) * amp;
 
 /** 缓入缓出贝塞尔曲线（Spine 3.8 JSON 对象形式：curve=cx1, c2=cy1, c3=cx2, c4=cy2） */
-const EASE = { curve: 0.33, c2: 0.33, c3: 0.67, c4: 0.67 };
+const EASE = { c1x: 0.33, c1y: 0.33, c2x: 0.67, c2y: 0.67 };
 
 /** 为动画骨骼时间轴所有"非末帧"写入默认贝塞尔曲线，使动作平滑 */
-export function applyEaseCurves(anim: any): number {
+export function applyEaseCurves(anim: any, modern = false): number {
   let n = 0;
   const boneTls = anim.bones ?? {};
   for (const tl of Object.values(boneTls) as any[]) {
@@ -61,10 +62,7 @@ export function applyEaseCurves(anim: any): number {
       if (!Array.isArray(frames) || frames.length < 2) continue;
       for (let i = 0; i < frames.length - 1; i++) {
         if (frames[i].curve === undefined) {
-          frames[i].curve = EASE.curve;
-          frames[i].c2 = EASE.c2;
-          frames[i].c3 = EASE.c3;
-          frames[i].c4 = EASE.c4;
+          setBezier(frames[i], frames[i + 1], key, EASE, modern);
           n++;
         }
       }
@@ -292,7 +290,7 @@ export function generateAnimation(json: any, templateName: string, options: Gene
     }
   }
   // 关键帧写入缓入缓出贝塞尔曲线，动作更自然
-  const curves = applyEaseCurves(json.animations[name]);
+  const curves = applyEaseCurves(json.animations[name], uses43(json));
 
   return {
     animationName: name,

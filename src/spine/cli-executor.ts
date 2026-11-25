@@ -39,13 +39,15 @@ class CliExecutor {
     const cfg = configManager.assertSpineExists();
     const timeoutMs = options.timeoutMs ?? cfg.cliTimeoutMs;
 
+    const args = cfg.spineVersion ? ["-u", cfg.spineVersion, ...options.args] : options.args;
+
     return new Promise<CliResult>((resolve, reject) => {
       const startedAt = Date.now();
-      logger.debug(`CLI 执行: ${cfg.spineExe} ${options.args.join(" ")}`);
+      logger.debug(`CLI 执行: ${cfg.spineExe} ${args.join(" ")}`);
 
       let child;
       try {
-        child = spawn(cfg.spineExe, options.args, {
+        child = spawn(cfg.spineExe, args, {
           cwd: options.cwd,
           env: options.env ? { ...process.env, ...options.env } : process.env,
           windowsHide: true,
@@ -83,11 +85,11 @@ class CliExecutor {
         );
       }, timeoutMs);
 
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
+      child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+        stdout += chunk;
       });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
+      child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+        stderr += chunk;
       });
 
       child.on("error", (err: Error) => {
@@ -98,7 +100,7 @@ class CliExecutor {
           new SpineError(
             ErrorCode.SPINE_NOT_FOUND,
             `Spine CLI 启动失败：${err.message}`,
-            "请确认 SPINE_EXE 指向有效的 Spine.com 文件，且许可证已激活。"
+            "请确认 SPINE_EXE 指向有效的 Spine 启动器，且许可证已激活。"
           )
         );
       });
@@ -118,12 +120,16 @@ class CliExecutor {
             (result.stderr ? ` stderr: ${result.stderr.slice(0, 300)}` : "")
         );
 
-        if (!options.allowNonZero && result.exitCode !== 0) {
+        const output = `${result.stderr}\n${result.stdout}`;
+        const lines = output.split(/\r?\n/);
+        const errorIndex = lines.findIndex(line => /^\s*(?:ERROR[: ]|Error:|Exception in thread)/i.test(line));
+        const errorLine = errorIndex < 0 ? undefined : lines.slice(errorIndex, errorIndex + 2).join(" ").slice(0, 500);
+        if (!options.allowNonZero && (result.exitCode !== 0 || errorLine)) {
           reject(
             new SpineError(
               ErrorCode.CLI_EXEC_FAILED,
-              `Spine CLI 执行失败（退出码 ${result.exitCode}）${result.stderr ? "：" + result.stderr.slice(0, 500) : ""}`,
-              "请检查参数是否正确、项目是否兼容 3.8.75。可在 debug 日志中查看完整输出。"
+              `Spine CLI 执行失败（退出码 ${result.exitCode}）：${errorLine ?? (result.stderr || result.stdout).slice(-500)}`,
+              "请检查参数是否正确、编辑器与项目版本是否匹配。可在 debug 日志中查看完整输出。"
             )
           );
           return;

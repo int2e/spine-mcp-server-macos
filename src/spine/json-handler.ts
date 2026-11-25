@@ -10,6 +10,7 @@
  *   animations.<name>.slots.<slotName>.attachment[] 每帧 { time, name }
  *   animations.<name>.slots.<slotName>.color[]     每帧 { time, color }
  */
+import { constraintsOf, drawOrderOffsets, drawOrderSlots, setBezier, uses43 } from "./format";
 import { BoneInfo, BoneKeyframeChange } from "../types";
 import { ErrorCode, SpineError } from "../utils/error-codes";
 
@@ -114,41 +115,24 @@ export function updateBoneKeyframe(
 
   // 旋转 → rotate 时间轴（字段 angle）
   if (changes.rotation !== undefined) {
-    (boneTimelines.rotate ??= []);
-    affected += upsertTimelineFrame(boneTimelines.rotate, time, { angle: setup.rotation ?? 0 }, { angle: changes.rotation });
+    const key = uses43(json) ? "value" : "angle";
+    affected += upsertTimelineFrame(boneTimelines.rotate ??= [], time, {}, { [key]: changes.rotation });
   }
 
-  // 位移 → translate 时间轴（字段 x/y）
-  if (changes.x !== undefined || changes.y !== undefined) {
-    (boneTimelines.translate ??= []);
-    affected += upsertTimelineFrame(
-      boneTimelines.translate,
-      time,
-      { x: setup.x ?? 0, y: setup.y ?? 0 },
-      { ...(changes.x !== undefined ? { x: changes.x } : {}), ...(changes.y !== undefined ? { y: changes.y } : {}) }
-    );
-  }
-
-  // 缩放 → scale 时间轴
-  if (changes.scaleX !== undefined || changes.scaleY !== undefined) {
-    (boneTimelines.scale ??= []);
-    affected += upsertTimelineFrame(
-      boneTimelines.scale,
-      time,
-      { x: setup.scaleX ?? 1, y: setup.scaleY ?? 1 },
-      { ...(changes.scaleX !== undefined ? { x: changes.scaleX } : {}), ...(changes.scaleY !== undefined ? { y: changes.scaleY } : {}) }
-    );
-  }
-
-  // 切变 → shear 时间轴
-  if (changes.shearX !== undefined || changes.shearY !== undefined) {
-    (boneTimelines.shear ??= []);
-    affected += upsertTimelineFrame(
-      boneTimelines.shear,
-      time,
-      { x: setup.shearX ?? 0, y: setup.shearY ?? 0 },
-      { ...(changes.shearX !== undefined ? { x: changes.shearX } : {}), ...(changes.shearY !== undefined ? { y: changes.shearY } : {}) }
-    );
+  for (const [timeline, x, y, fallback, setupX, setupY] of [
+    ["translate", changes.x, changes.y, 0, setup.x, setup.y],
+    ["scale", changes.scaleX, changes.scaleY, 1, setup.scaleX, setup.scaleY],
+    ["shear", changes.shearX, changes.shearY, 0, setup.shearX, setup.shearY],
+  ] as const) {
+    if (x === undefined && y === undefined) continue;
+    if (uses43(json) && (boneTimelines[timeline + "x"] || boneTimelines[timeline + "y"])) {
+      if (x !== undefined) affected += upsertTimelineFrame(boneTimelines[timeline + "x"] ??= [], time, {}, { value: x });
+      if (y !== undefined) affected += upsertTimelineFrame(boneTimelines[timeline + "y"] ??= [], time, {}, { value: y });
+    } else {
+      const defaults = uses43(json) ? {} : { x: setupX ?? fallback, y: setupY ?? fallback };
+      affected += upsertTimelineFrame(boneTimelines[timeline] ??= [], time, defaults,
+        { ...(x !== undefined && { x }), ...(y !== undefined && { y }) });
+    }
   }
 
   return affected;
@@ -164,6 +148,7 @@ function findSkin(json: any, skinName: string): any {
 
 /** 确保皮肤存在并返回其 attachments 映射（兼容两种格式） */
 export function ensureSkinAttachments(json: any, skinName: string): Record<string, any> {
+  if (uses43(json)) json.skins ??= [];
   if (Array.isArray(json.skins)) {
     let skin = json.skins.find((s: any) => s?.name === skinName);
     if (!skin) {
@@ -185,6 +170,18 @@ export function renameSlot(json: any, oldName: string, newName: string): void {
   // 1. slots 数组
   const slot = findSlot(json, oldName);
   slot.name = newName;
+  for (const c of constraintsOf(json, "path")) {
+    const field = uses43(json) ? "slot" : "target";
+    if (c[field] === oldName) c[field] = newName;
+  }
+  for (const anim of Object.values<any>(json.animations ?? {})) {
+    const keys = [...(anim.drawOrder ?? anim.draworder ?? [])];
+    for (const folder of anim.drawOrderFolder ?? []) {
+      folder.slots = folder.slots.map((slot: string) => slot === oldName ? newName : slot);
+      keys.push(...(folder.keys ?? []));
+    }
+    for (const key of keys) for (const change of key.offsets ?? []) if (change.slot === oldName) change.slot = newName;
+  }
   // 2. skins（数组或对象两种格式）
   if (json.skins) {
     if (Array.isArray(json.skins)) {
@@ -213,7 +210,7 @@ export function renameSlot(json: any, oldName: string, newName: string): void {
       }
       // 4. 网格变形时间轴 deform（Spine 3.8 键名，实测）：deform.<皮肤名>.<插槽名>
       //    兼容旧键名 ffd
-      for (const deformKey of ["deform", "ffd"]) {
+      for (const deformKey of ["deform", "ffd", "attachments"]) {
         const deform = anim[deformKey];
         if (deform && typeof deform === "object") {
           for (const [skinName, slotsMap] of Object.entries<any>(deform)) {
@@ -411,14 +408,15 @@ export function renameBone(json: any, oldName: string, newName: string): void {
     }
   }
   // 4. 约束引用（ik / transform / path）
-  for (const key of ["ik", "transform", "path"]) {
-    for (const c of json[key] ?? []) {
+  for (const key of ["ik", "transform", "path", "physics", "slider"]) {
+    for (const c of constraintsOf(json, key)) {
+      if (c.source === oldName) c.source = newName;
       if (Array.isArray(c.bones)) {
         c.bones = c.bones.map((n: string) => (n === oldName ? newName : n));
       } else if (c.bone === oldName) {
         c.bone = newName;
       }
-      if (c.target === oldName) {
+      if (key !== "path" && c.target === oldName) {
         c.target = newName;
       }
     }
@@ -446,6 +444,22 @@ export function deleteSlot(json: any, slotName: string): void {
   if (!findSlot(json, slotName)) {
     throw new SpineError(ErrorCode.SLOT_NOT_FOUND, `插槽 "${slotName}" 不存在。`);
   }
+  if (uses43(json)) {
+    const setup = json.slots.map((s: any) => s.name);
+    const withoutSlot = (slots: string[]) => slots.filter(s => s !== slotName);
+    const removeFromOrder = (keys: any[], slots: string[]) => {
+      for (const key of keys) key.offsets = drawOrderOffsets(withoutSlot(slots), withoutSlot(drawOrderSlots(slots, key.offsets ?? [])));
+    };
+    for (const anim of Object.values<any>(json.animations ?? {})) {
+      removeFromOrder(anim.drawOrder ?? [], setup);
+      for (const folder of anim.drawOrderFolder ?? []) {
+        if (!folder.slots.includes(slotName)) continue;
+        removeFromOrder(folder.keys ?? [], folder.slots);
+        folder.slots = withoutSlot(folder.slots);
+      }
+    }
+    for (const c of constraintsOf(json, "path")) if (c.slot === slotName) deleteConstraint(json, "path", c.name);
+  }
   json.slots = (json.slots ?? []).filter((s: any) => s.name !== slotName);
   // skins
   if (json.skins) {
@@ -467,7 +481,7 @@ export function deleteSlot(json: any, slotName: string): void {
       if (anim.slots) {
         delete anim.slots[slotName];
       }
-      for (const deformKey of ["deform", "ffd"]) {
+      for (const deformKey of ["deform", "ffd", "attachments"]) {
         const deform = anim[deformKey];
         if (deform && typeof deform === "object") {
           for (const [skinName, slotsMap] of Object.entries<any>(deform)) {
@@ -522,6 +536,7 @@ export function batchRename(json: any, pattern: string, replacement: string, tar
 
 /** 确保皮肤存在（兼容数组/对象格式），返回 true=新建 */
 export function ensureSkin(json: any, name: string): boolean {
+  if (uses43(json)) json.skins ??= [];
   if (Array.isArray(json.skins)) {
     if (json.skins.some((s: any) => s?.name === name)) {
       return false;
@@ -565,7 +580,7 @@ export function renameSkin(json: any, oldName: string, newName: string): void {
   // 同步 deform 皮肤键
   if (json.animations) {
     for (const anim of Object.values<any>(json.animations)) {
-      for (const deformKey of ["deform", "ffd"]) {
+      for (const deformKey of ["deform", "ffd", "attachments"]) {
         const deform = anim[deformKey];
         if (deform && oldName in deform) {
           deform[newName] = deform[oldName];
@@ -597,7 +612,7 @@ export function deleteSkin(json: any, name: string): void {
   }
   if (json.animations) {
     for (const anim of Object.values<any>(json.animations)) {
-      for (const deformKey of ["deform", "ffd"]) {
+      for (const deformKey of ["deform", "ffd", "attachments"]) {
         const deform = anim[deformKey];
         if (deform && name in deform) {
           delete deform[name];
@@ -621,7 +636,7 @@ export function setDefaultSkin(json: any, name = "default"): void {
 
 /** 查找约束 */
 export function findConstraint(json: any, type: "ik" | "transform" | "path", name: string): any {
-  return (json[type] ?? []).find((c: any) => c.name === name);
+  return constraintsOf(json, type).find(c => c.name === name);
 }
 
 function requireConstraint(json: any, type: "ik" | "transform" | "path", name: string): any {
@@ -651,12 +666,42 @@ function assertConstraintRefs(json: any, type: "ik" | "transform" | "path", bone
   // path 约束的 target 是路径附件，不强制校验（可能是已存在的附件名）
 }
 
+function constraintFields43(props: Record<string, any>): Record<string, any> {
+  const aliases: Record<string, string[]> = {
+    local: ["localSource", "localTarget"], relative: ["additive"],
+    rotateMix: ["mixRotate"], translateMix: ["mixX", "mixY"], scaleMix: ["mixScaleX", "mixScaleY"],
+    shearMix: ["mixShearY"], rotate: ["rotation"],
+  };
+  const fields: Record<string, any> = {};
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "positionMix") throw new SpineError(ErrorCode.INVALID_ARGUMENT, "Spine 4.3 路径约束使用 position、spacing、translateMix 和 rotateMix。");
+    for (const field of aliases[key] ?? [key]) fields[field] = value;
+  }
+  return fields;
+}
+
 /** 新增约束（通用） */
 function addConstraint(json: any, type: "ik" | "transform" | "path", name: string, bones: string[], target: string, props: Record<string, any>): void {
   if (findConstraint(json, type, name)) {
     throw new SpineError(ErrorCode.INVALID_ARGUMENT, `${typeLabel(type)}约束 "${name}" 已存在。`);
   }
   assertConstraintRefs(json, type, bones, target);
+  if (uses43(json)) {
+    if (type === "path" && !findSlot(json, target)) throw new SpineError(ErrorCode.SLOT_NOT_FOUND, `路径约束的目标插槽 ${target} 不存在。`);
+    const targetField = type === "transform" ? "source" : type === "path" ? "slot" : "target";
+    const entry: any = { type, name, bones: [...bones], [targetField]: target, ...constraintFields43(props) };
+    if (type === "transform") {
+      entry.properties = Object.fromEntries(["rotate", "x", "y", "scaleX", "scaleY", "shearY"].map(key => [key, { to: { [key]: {} } }]));
+    }
+    if (typeof props.skin === "string") {
+      const skin = findSkin(json, props.skin);
+      if (!skin) throw new SpineError(ErrorCode.INVALID_ARGUMENT, `皮肤 ${props.skin} 不存在。`);
+      entry.skin = true;
+      (skin[type] ??= []).push(name);
+    }
+    (json.constraints ??= []).push(entry);
+    return;
+  }
   json[type] ??= [];
   const entry: any = { name, bones: [...bones], target, ...props };
   // order 必须在所有约束类型间唯一递增（Spine 按 order 排序应用约束）
@@ -735,8 +780,12 @@ export function addPath(
 
 /** 删除约束 */
 export function deleteConstraint(json: any, type: "ik" | "transform" | "path", name: string): void {
-  requireConstraint(json, type, name);
-  json[type] = (json[type] ?? []).filter((c: any) => c.name !== name);
+  const entry = requireConstraint(json, type, name);
+  const list = uses43(json) ? json.constraints : json[type];
+  list.splice(list.indexOf(entry), 1);
+  for (const skin of skinsList(json)) {
+    if (Array.isArray((skin as any)[type])) (skin as any)[type] = (skin as any)[type].filter((v: string) => v !== name);
+  }
   // 移除动画时间轴
   if (json.animations) {
     for (const anim of Object.values<any>(json.animations)) {
@@ -750,7 +799,7 @@ export function deleteConstraint(json: any, type: "ik" | "transform" | "path", n
 /** 修改约束 Setup 属性（合并） */
 export function setConstraintSetup(json: any, type: "ik" | "transform" | "path", name: string, props: Record<string, any>): void {
   const c = requireConstraint(json, type, name);
-  Object.assign(c, props);
+  Object.assign(c, uses43(json) ? constraintFields43(props) : props);
 }
 
 /** 写约束动画时间轴关键帧：animations.<name>.<type>.<constraintName> = [{time, ...}] */
@@ -768,8 +817,19 @@ export function updateConstraintKeyframe(
   requireConstraint(json, type, name);
   const anim = json.animations[animationName];
   anim[type] ??= {};
-  const tl = (anim[type][name] ??= []);
-  return upsertTimelineFrame(tl, time, {}, changes);
+  const values = uses43(json) ? constraintFields43(changes) : changes;
+  if (uses43(json) && type === "path") {
+    const timelines = (anim.path[name] ??= {});
+    let affected = 0;
+    const { position, spacing, rotation, ...mix } = values;
+    if (rotation !== undefined) throw new SpineError(ErrorCode.INVALID_ARGUMENT, "Spine 4.3 的路径旋转偏移只支持 Setup，动画可调整 rotateMix。");
+    for (const [axis, value] of Object.entries({ position, spacing })) {
+      if (value !== undefined) affected += upsertTimelineFrame(timelines[axis] ??= [], time, {}, { value });
+    }
+    if (Object.keys(mix).length) affected += upsertTimelineFrame(timelines.mix ??= [], time, {}, mix);
+    return affected;
+  }
+  return upsertTimelineFrame(anim[type][name] ??= [], time, {}, values);
 }
 
 // ============================================================
@@ -863,10 +923,11 @@ export function updateDeformKeyframe(
     throw new SpineError(ErrorCode.INVALID_ARGUMENT, `动画 "${animationName}" 不存在。`);
   }
   const anim = json.animations[animationName];
-  anim.deform ??= {};
-  const bySlot = (anim.deform[skinName] ??= {});
+  const modern = uses43(json);
+  const skins = (anim[modern ? "attachments" : "deform"] ??= {});
+  const bySlot = (skins[skinName] ??= {});
   const byAtt = (bySlot[slotName] ??= {});
-  const tl = (byAtt[attachmentName] ??= []);
+  const tl = modern ? ((byAtt[attachmentName] ??= {}).deform ??= []) : (byAtt[attachmentName] ??= []);
   return upsertTimelineFrame(tl, time, {}, { vertices });
 }
 
@@ -890,8 +951,8 @@ export function updateSlotKeyframe(
     affected += upsertTimelineFrame(slotTl.attachment, time, {}, { name: changes.attachment });
   }
   if (changes.color !== undefined) {
-    (slotTl.color ??= []);
-    affected += upsertTimelineFrame(slotTl.color, time, {}, { color: changes.color });
+    const color = (slotTl[uses43(json) ? "rgba" : "color"] ??= []);
+    affected += upsertTimelineFrame(color, time, {}, { color: changes.color });
   }
   return affected;
 }
@@ -944,10 +1005,18 @@ export function setDrawOrder(json: any, animationName: string, time: number, slo
     throw new SpineError(ErrorCode.INVALID_ARGUMENT, `动画 "${animationName}" 不存在。`);
   }
   const anim = json.animations[animationName];
-  const drawOrder = (anim.draworder ??= []);
+  const modern = uses43(json);
+  const drawOrder = (anim[modern ? "drawOrder" : "draworder"] ??= []);
   // 计算每个插槽的原始索引
   const slotIndex = new Map<string, number>((json.slots ?? []).map((s: any, i: number) => [s.name, i] as [string, number]));
-  const offsets = slots.map((slot, index) => ({ slot, offset: index }));
+  let order = slots;
+  if (modern) {
+    if (new Set(slots).size !== slots.length || slots.some(slot => !slotIndex.has(slot))) {
+      throw new SpineError(ErrorCode.INVALID_ARGUMENT, "绘制顺序包含重复或未知插槽。");
+    }
+    order = [...slots, ...Array.from(slotIndex.keys()).filter(slot => !slots.includes(slot))];
+  }
+  const offsets = modern ? drawOrderOffsets([...slotIndex.keys()], order) : order.map((slot, offset) => ({ slot, offset }));
   offsets.sort((a, b) => (slotIndex.get(a.slot) ?? Number.MAX_SAFE_INTEGER) - (slotIndex.get(b.slot) ?? Number.MAX_SAFE_INTEGER));
   upsertTimelineFrame(drawOrder, time, {}, { offsets });
 }
@@ -985,17 +1054,14 @@ export function setCurve(
   if (!frame) {
     throw new SpineError(ErrorCode.FRAME_OUT_OF_RANGE, `时间轴 "${timelinePath}" 第 ${keyframeIndex} 帧不存在。`, `该时间轴共 ${tl.length} 帧。`);
   }
+  for (const key of ["c2", "c3", "c4"]) delete frame[key];
   if (curve === "stepped") {
     frame.curve = "stepped";
   } else if (curve === "bezier") {
     if (!bezier) {
       throw new SpineError(ErrorCode.INVALID_ARGUMENT, "bezier 曲线需要提供 c1x/c1y/c2x/c2y。");
     }
-    // Spine 3.8 JSON 对象形式：curve=cx1, c2=cy1, c3=cx2, c4=cy2（数组形式会被 Spine CLI 拒绝）
-    frame.curve = bezier.c1x;
-    frame.c2 = bezier.c1y;
-    frame.c3 = bezier.c2x;
-    frame.c4 = bezier.c2y;
+    setBezier(frame, tl[keyframeIndex + 1], timelineName, bezier, uses43(json));
   } else {
     delete frame.curve;
   }
@@ -1034,6 +1100,9 @@ export function scaleAnimationDuration(json: any, animationName: string, targetD
       for (const item of obj) {
         if (item && typeof item === "object" && typeof item.time === "number") {
           item.time = item.time * ratio;
+        }
+        if (uses43(json) && Array.isArray(item?.curve)) {
+          for (let i = 0; i < item.curve.length; i += 2) item.curve[i] *= ratio;
         }
       }
       return;
@@ -1120,7 +1189,15 @@ export function deleteBone(json: any, name: string): { removed: string[] } {
   json.bones = oldBones.filter((b: any) => !removedSet.has(b.name));
 
   // 移除绑在这些骨骼上的插槽
-  json.slots = (json.slots ?? []).filter((s: any) => !removedSet.has(s.bone));
+  for (const slot of [...(json.slots ?? [])]) if (removedSet.has(slot.bone)) deleteSlot(json, slot.name);
+  if (uses43(json)) {
+    for (const c of [...(json.constraints ?? [])]) {
+      if (removedSet.has(c.bone) || removedSet.has(c.source) || removedSet.has(c.target) || c.bones?.some((b: string) => removedSet.has(b))) {
+        deleteConstraint(json, c.type, c.name);
+      }
+    }
+    for (const skin of json.skins ?? []) if (skin.bones) skin.bones = skin.bones.filter((b: string) => !removedSet.has(b));
+  }
 
   // 清理动画中这些骨骼的时间轴
   if (json.animations) {
@@ -1153,7 +1230,9 @@ export function setBone(
   if (!bone) {
     throw new SpineError(ErrorCode.BONE_NOT_FOUND, `骨骼 "${name}" 不存在。`);
   }
-  Object.assign(bone, props);
+  const { transformMode, ...setup } = props;
+  Object.assign(bone, setup);
+  if (transformMode !== undefined) bone[uses43(json) ? "inherit" : "transform"] = transformMode;
 }
 
 /** 设置插槽 Setup 属性（颜色/混合模式/默认附件） */
@@ -1224,9 +1303,20 @@ export function scaleProjectJson(json: any, scale: number): void {
   if (json.animations) {
     for (const anim of Object.values<any>(json.animations)) {
       for (const boneTl of Object.values<any>(anim.bones ?? {})) {
-        for (const frame of boneTl.translate ?? []) {
-          if (typeof frame.x === "number") frame.x *= scale;
-          if (typeof frame.y === "number") frame.y *= scale;
+        for (const axis of ["translate", "translatex", "translatey"]) {
+          for (const frame of boneTl[axis] ?? []) {
+            for (const key of ["x", "y", "value"]) if (typeof frame[key] === "number") frame[key] *= scale;
+            if (uses43(json) && Array.isArray(frame.curve)) {
+              for (let i = 1; i < frame.curve.length; i += 2) frame.curve[i] *= scale;
+            }
+          }
+        }
+      }
+      if (uses43(json)) {
+        for (const slots of Object.values<any>(anim.attachments ?? {})) {
+          for (const atts of Object.values<any>(slots)) for (const timelines of Object.values<any>(atts)) {
+            for (const key of timelines.deform ?? []) if (key.vertices) key.vertices = key.vertices.map((v: number) => v * scale);
+          }
         }
       }
     }

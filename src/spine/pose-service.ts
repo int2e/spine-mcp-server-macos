@@ -6,6 +6,7 @@
  */
 import { ErrorCode, SpineError } from "../utils/error-codes";
 import { updateBoneKeyframe } from "./json-handler";
+import { uses43 } from "./format";
 import { applyEaseCurves } from "./animation-generate-service";
 
 export interface PoseBone {
@@ -88,7 +89,7 @@ export function poseToAnimation(json: any, poses: PoseFrame[], options: PoseOpti
       }
     }
   }
-  const curves = applyEaseCurves(json.animations[name]);
+  const curves = applyEaseCurves(json.animations[name], uses43(json));
 
   return { animationName: name, poses: sorted.length, bones: boneFrames.size, keyframes, curves, duration };
 }

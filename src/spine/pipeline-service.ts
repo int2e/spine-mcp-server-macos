@@ -2,6 +2,7 @@
  * 一键成片管线服务：把 散件切割→装配绑骨→镜像补全→生成动作→导出 串成一次调用。
  * 用户只需：一张透明散件 PNG + AI 装配索引 + 想要的效果 → 直接得到动画项目与成片（GIF/精灵表/预览）。
  */
+import { analyzeAnimation } from "./project-reader";
 import * as fs from "fs";
 import * as path from "path";
 import sharp from "sharp";
@@ -107,7 +108,7 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   // 6) 可选导入 .spine
   let projectPath: string | undefined;
   if (options.projectPath) {
-    await importJson(options.projectPath, skeletonJson, { skeletonName, backup: false });
+    await importJson(options.projectPath, skeletonJson, { skeletonName });
     projectPath = options.projectPath;
     steps.push({ step: "import", detail: `导入 ${projectPath}` });
   }
@@ -137,7 +138,7 @@ async function exportPipeline(
   const atlasDir = path.join(outputDir, "atlas");
   const packed = await repackAtlas(partFiles.map((f) => ({ name: path.basename(f), file: f })), atlasDir, "pipeline");
   const json = JSON.parse(fs.readFileSync(skeletonJson, "utf8"));
-  const duration = json.animations?.[animName]?.duration ?? 1;
+  const duration = json.animations?.[animName]?.duration ?? analyzeAnimation(json.animations?.[animName]).duration;
   const width = options.width ?? 256;
   const height = options.height ?? 256;
   const fps = options.fps ?? 12;

@@ -4,15 +4,17 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { homedir } from "os";
 import * as dotenv from "dotenv";
 import { ErrorCode, SpineError } from "./utils/error-codes";
 import { configureLogger, logger } from "./logger";
-import { LogLevel, DEFAULT_CLI_TIMEOUT_MS, DEFAULT_LOG_LEVEL, SPINE_EXE_NAME } from "./constants";
+import { LogLevel, DEFAULT_CLI_TIMEOUT_MS, DEFAULT_LOG_LEVEL, MAC_SPINE_VERSION, LEGACY_SPINE_VERSION, SPINE_EXE_NAME } from "./constants";
 
 /** 运行时配置 */
 export interface Config {
   /** Spine 命令行工具绝对路径 */
   spineExe: string;
+  spineVersion?: string;
   /** 日志级别 */
   logLevel: LogLevel;
   /** CLI 超时（毫秒） */
@@ -23,18 +25,26 @@ export interface Config {
   configSource: string;
 }
 
-/** 常见的 Spine 安装位置（Windows），用于自动检测 */
-const SPINE_SEARCH_PATHS: string[] = [
-  // 本机已知路径（实测）
-  "D:/cocos/SpinePro3.8.75/Spine.com",
-  // 官方默认安装
-  "C:/Program Files/Spine/Spine.com",
-  "C:/Program Files (x86)/Spine/Spine.com",
-  "D:/Spine/Spine.com",
-  "E:/Spine/Spine.com",
-  // macOS（暂保留，供后期扩展）
-  "/Applications/Spine/Spine.app/Contents/MacOS/Spine",
-];
+/** 安装向导和服务使用相同的查找顺序。 */
+export function findSpineLauncher(): string | undefined {
+  const windows = process.platform === "win32";
+  const candidates = windows ? [
+    "D:/cocos/SpinePro3.8.75/Spine.com", "D:/cocos/Spine/Spine.com",
+    path.join(process.env.ProgramFiles || "C:/Program Files", "Spine", "Spine.com"),
+    "C:/Program Files (x86)/Spine/Spine.com", "C:/Spine/Spine.com", "D:/Spine/Spine.com", "E:/Spine/Spine.com",
+  ] : ["/Applications", path.join(homedir(), "Applications")].flatMap(dir => [
+    path.join(dir, "Spine.app/Contents/MacOS/Spine"), path.join(dir, "Spine/Spine.app/Contents/MacOS/Spine"),
+  ]);
+  for (const dir of (process.env.PATH || "").split(path.delimiter).filter(Boolean)) {
+    candidates.push(path.join(dir, windows ? SPINE_EXE_NAME : "Spine"));
+  }
+  return candidates.find(candidate => {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.statSync(candidate).isFile();
+    } catch { return false; }
+  });
+}
 
 class ConfigManager {
   private config: Config | null = null;
@@ -49,33 +59,6 @@ class ConfigManager {
     }
   }
 
-  /** 自动检测 Spine 可执行文件（找不到返回 undefined） */
-  private detectSpineExe(): string | undefined {
-    for (const p of SPINE_SEARCH_PATHS) {
-      try {
-        if (fs.existsSync(p) && fs.statSync(p).isFile()) {
-          return p;
-        }
-      } catch {
-        // ignore
-      }
-    }
-    // 尝试 PATH 中是否有 Spine.com
-    try {
-      const paths = (process.env.PATH ?? "").split(path.delimiter);
-      for (const dir of paths) {
-        if (!dir) continue;
-        const candidate = path.join(dir, SPINE_EXE_NAME);
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return undefined;
-  }
-
   /** 读取并解析配置（幂等，可重复调用） */
   load(overrides: Partial<Config> = {}): Config {
     if (this.config && Object.keys(overrides).length === 0) {
@@ -87,9 +70,12 @@ class ConfigManager {
     let spineExe = overrides.spineExe ?? process.env.SPINE_EXE?.trim();
     let source = "SPINE_EXE 环境变量/.env";
     if (!spineExe) {
-      spineExe = this.detectSpineExe();
+      spineExe = findSpineLauncher();
       source = "自动检测";
     }
+
+    if (spineExe && path.basename(spineExe).endsWith(".app")) spineExe = path.join(spineExe, "Contents/MacOS/Spine");
+    const spineVersion = overrides.spineVersion ?? (process.env.SPINE_VERSION?.trim() || (process.platform === "darwin" ? MAC_SPINE_VERSION : undefined));
 
     // 2) 日志级别
     const rawLevel = overrides.logLevel ?? (process.env.LOG_LEVEL as LogLevel) ?? DEFAULT_LOG_LEVEL;
@@ -106,6 +92,7 @@ class ConfigManager {
 
     this.config = {
       spineExe: spineExe ?? "",
+      spineVersion,
       logLevel,
       cliTimeoutMs,
       cocosWorkspace,
@@ -131,7 +118,7 @@ class ConfigManager {
     if (!cfg.spineExe) {
       throw new SpineError(
         ErrorCode.SPINE_NOT_FOUND,
-        "未找到 Spine.com。请设置环境变量 SPINE_EXE 指向 Spine 命令行工具的绝对路径（例如 D:/cocos/SpinePro3.8.75/Spine.com）。",
+        "未找到 Spine 启动器。请设置 SPINE_EXE 指向 Spine.app 或 Spine.com。",
         "可在项目根目录复制 .env.example 为 .env 并填写 SPINE_EXE。"
       );
     }
@@ -150,6 +137,7 @@ class ConfigManager {
     const cfg = this.assertSpineExists();
     const lines = [
       `Spine CLI : ${cfg.spineExe}  (来源: ${cfg.configSource})`,
+      `编辑器版本: ${cfg.spineVersion ?? "启动器默认版本"}`,
       `日志级别  : ${cfg.logLevel}`,
       `CLI 超时  : ${cfg.cliTimeoutMs} ms`,
     ];
@@ -162,3 +150,8 @@ class ConfigManager {
 
 /** 全局单例 */
 export const configManager = new ConfigManager();
+
+/** 新建 JSON 使用当前配置的编辑器格式。 */
+export function newSkeletonVersion(): string {
+  return configManager.get().spineVersion ?? LEGACY_SPINE_VERSION;
+}

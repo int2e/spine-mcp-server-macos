@@ -3,6 +3,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID } from "crypto";
 import { MAX_BACKUPS } from "../constants";
 
 /** 确保目录存在（递归创建） */
@@ -34,8 +35,8 @@ export function removeDir(dir: string): void {
 export function backupFile(filePath: string): string {
   const dir = path.dirname(filePath);
   const base = path.basename(filePath);
-  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const backupPath = path.join(dir, `${base}.${ts}.bak`);
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = path.join(dir, `${base}.${ts}-${randomUUID()}.bak`);
   fs.copyFileSync(filePath, backupPath);
 
   // 清理旧备份，保留最近 MAX_BACKUPS 个

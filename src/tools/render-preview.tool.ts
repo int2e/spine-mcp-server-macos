@@ -8,7 +8,10 @@
 import { z } from "zod";
 import { BaseTool } from "./base.tool";
 import { renderFrameToRgba } from "../spine/render-service";
-import { renderRuntimeFrameToPng, renderRuntimeFrame, isRuntimeRenderAvailable } from "../spine/render-runtime";
+import { renderRuntimeFrameToPng, prepareRuntime, isRuntimeRenderAvailable } from "../spine/render-runtime";
+import { findProjectAtlas } from "../spine/check-service";
+import { uses43 } from "../spine/format";
+import { analyzeAnimation } from "../spine/project-reader";
 import { parseAtlas } from "../spine/atlas-utils";
 import { overlayBonesOnFrame, rgbaToClamped, clampedToPng } from "../spine/render-visualize-service";
 import { exportProject } from "../spine/export-service";
@@ -59,7 +62,11 @@ export class RenderPreviewTool extends BaseTool {
       const animName = args.animationName ?? Object.keys(json.animations ?? {})[0];
       if (!animName) return { success: false, message: "项目没有动画。", errorCode: "E_INVALID_ARGUMENT" };
 
-      const official = !!(args.atlasPath && args.imagePath) && isRuntimeRenderAvailable();
+      if (args.projectPath && (!args.atlasPath || !args.imagePath)) {
+        const atlas = findProjectAtlas(args.projectPath);
+        args = { ...args, atlasPath: args.atlasPath ?? atlas?.atlas, imagePath: args.imagePath ?? atlas?.png };
+      }
+      const official = !!(args.atlasPath && args.imagePath) && (uses43(json) || isRuntimeRenderAvailable());
       const skel = json.skeleton ?? {};
       const width = args.width ?? Math.max(1, Math.ceil(skel.width ?? 256));
       const height = args.height ?? Math.max(1, Math.ceil(skel.height ?? 256));
@@ -106,6 +113,7 @@ export class RenderPreviewTool extends BaseTool {
           data: { outputPath: args.outputPath, width: r.width, height: r.height, animationName: animName, time, renderer: "spine-runtime", wireframe: !!args.wireframe },
         };
       } catch (e) {
+        if (uses43(json)) throw e;
         console.warn("[render-preview] 官方 runtime 渲染失败，回退内置渲染：", (e as Error).message);
       }
     }
@@ -129,30 +137,22 @@ export class RenderPreviewTool extends BaseTool {
     const n = args.frames ?? 8;
     const cols = args.spriteColumns ?? Math.min(4, Math.ceil(Math.sqrt(n)));
     const rows = Math.ceil(n / cols);
-    const duration = json.animations?.[animName]?.duration ?? 1;
+    const duration = json.animations?.[animName]?.duration ?? analyzeAnimation(json.animations?.[animName]).duration;
     const atlas = args.atlasPath ? parseAtlas(fs.readFileSync(args.atlasPath, "utf8")) : undefined;
     const rgbs: Buffer[] = [];
 
+    let render;
+    if (official && atlas) {
+      try { render = await prepareRuntime(json, atlas.raw, args.imagePath, path.dirname(args.atlasPath)); }
+      catch (error) { if (uses43(json)) throw error; official = false; }
+    }
     for (let i = 0; i < n; i++) {
       const t = duration * (i / n);
-      if (official) {
+      if (render && official) {
         try {
-          const r = await renderRuntimeFrame({
-            skeletonJsonPath: args.skeletonJson,
-            atlasPath: args.atlasPath,
-            imagePath: args.imagePath,
-            animationName: animName,
-            time: t,
-            width,
-            height,
-            wireframe: args.wireframe,
-          });
-          rgbs.push(r.rgba);
+          rgbs.push(render({ animationName: animName, time: t, width, height, wireframe: args.wireframe }).rgba);
           continue;
-        } catch (e) {
-          console.warn("[render-preview] 官方 runtime 渲染失败，回退内置渲染：", (e as Error).message);
-          official = false;
-        }
+        } catch (error) { if (uses43(json)) throw error; official = false; }
       }
       const meta = { slots: 0 };
       const buf = await renderFrameToRgba(json, atlas as any, args.imagePath, animName, t, width, height, meta);

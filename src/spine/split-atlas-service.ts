@@ -6,7 +6,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import sharp from "sharp";
-import { parseAtlas, ParsedAtlas, AtlasRegion } from "./atlas-utils";
+import { parseAtlas, ParsedAtlas, AtlasRegion, unpremultiply } from "./atlas-utils";
 import { ErrorCode, SpineError } from "../utils/error-codes";
 import { ensureDir } from "../utils/file-utils";
 
@@ -36,27 +36,9 @@ export interface SplitResult {
 async function extractRegionPixels(image: sharp.Sharp, region: AtlasRegion): Promise<Buffer> {
   const w = region.rotate ? region.height : region.width;
   const h = region.rotate ? region.width : region.height;
-  const raw = await image.clone().extract({ left: region.x, top: region.y, width: w, height: h }).raw().toBuffer();
-  if (region.rotate) {
-    // 逆时针旋转 90°：Spine atlas 的 rotate=true 表示图片顺时针旋转 90° 存储，还原时需逆时针转
-    const srcW = region.height;
-    const srcH = region.width;
-    const dst = Buffer.alloc(raw.length);
-    const ch = 4;
-    for (let y = 0; y < srcH; y++) {
-      for (let x = 0; x < srcW; x++) {
-        const srcIdx = (y * srcW + x) * ch;
-        // 逆时针：dst(x', y') = src(y', W-1-x')
-        const dx = srcH - 1 - y;
-        const dy = x;
-        const dstIdx = (dy * srcH + dx) * ch;
-        dst[dstIdx] = raw[srcIdx];
-        dst[dstIdx + 1] = raw[srcIdx + 1];
-        dst[dstIdx + 2] = raw[srcIdx + 2];
-        dst[dstIdx + 3] = raw[srcIdx + 3];
-      }
-    }
-    return dst;
+  const raw = await image.clone().extract({ left: region.x, top: region.y, width: w, height: h }).ensureAlpha().raw().toBuffer();
+  if (region.degrees) {
+    return sharp(raw, { raw: { width: w, height: h, channels: 4 } }).rotate(region.degrees).raw().toBuffer();
   }
   return raw;
 }
@@ -142,13 +124,14 @@ export async function splitAtlas(atlasPath: string, imagePath: string, outputDir
   ensureDir(outputDir);
 
   const atlas: ParsedAtlas = parseAtlas(fs.readFileSync(atlasPath, "utf8"));
-  const image = sharp(imagePath);
+  const pages = atlas.pages.map((page, i) => sharp(i === 0 ? imagePath : path.join(path.dirname(atlasPath), page.name)));
   const parts: SplitPart[] = [];
 
   for (const region of atlas.regions) {
-    const regionW = region.rotate ? region.height : region.width;
-    const regionH = region.rotate ? region.width : region.height;
-    let raw = await extractRegionPixels(image, region);
+    const regionW = region.width;
+    const regionH = region.height;
+    let raw = await extractRegionPixels(pages[region.page], region);
+    if (atlas.pages[region.page].pma) unpremultiply(raw);
     raw = cleanAlpha(raw, regionW, regionH, threshold);
     let box = bbox(raw, regionW, regionH);
     if (box.x1 < 0) {

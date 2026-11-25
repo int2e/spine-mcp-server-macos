@@ -3,6 +3,8 @@
  * 输出骨骼层级树、插槽/附件/皮肤/动画/约束/事件，并给出每根骨骼的可动画角色建议
  * （直接喂给 spine_generate_animation 的 roleMap）。
  */
+import { analyzeAnimation } from "../spine/project-reader";
+import { constraintsOf } from "../spine/format";
 import { z } from "zod";
 import * as fs from "fs";
 import { BaseTool } from "./base.tool";
@@ -64,28 +66,15 @@ export class DescribeTool extends BaseTool {
       for (const slotAtts of Object.values<any>(atts)) attachmentCount += Object.keys(slotAtts ?? {}).length;
     }
 
-    const animations = Object.entries<any>(json.animations ?? {}).map(([name, anim]) => {
-      let keyframes = 0;
-      const count = (obj: any): void => {
-        if (Array.isArray(obj)) {
-          for (const item of obj) {
-            if (item && typeof item === "object") {
-              keyframes += Array.isArray(item) ? item.length : 0;
-              count(Object.values(item));
-            }
-          }
-        } else if (obj && typeof obj === "object") {
-          count(Object.values(obj));
-        }
-      };
-      count(anim.bones ?? {});
-      return { name, duration: anim.duration ?? 0, keyframes };
+    const animations = Object.entries(json.animations ?? {}).map(([name, anim]) => {
+      const { duration, keyframeCount } = analyzeAnimation(anim);
+      return { name, duration, keyframes: keyframeCount };
     });
 
     const constraints = {
-      ik: (json.ik ?? []).map((c: any) => c.name),
-      transform: (json.transform ?? []).map((c: any) => c.name),
-      path: (json.path ?? []).map((c: any) => c.name),
+      ik: constraintsOf(json, "ik").map((c: any) => c.name),
+      transform: constraintsOf(json, "transform").map((c: any) => c.name),
+      path: constraintsOf(json, "path").map((c: any) => c.name),
     };
 
     return {

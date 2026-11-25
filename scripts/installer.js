@@ -10,42 +10,9 @@ const { execSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 
-const SPINE_CANDIDATES = [
-  process.env.SPINE_EXE,
-  'D:/cocos/SpinePro3.8.75/Spine.com',
-  'D:/cocos/Spine/Spine.com',
-  'C:/Program Files/Spine/Spine.com',
-  'C:/Spine/Spine.com',
-];
-
-const COCOS_CANDIDATES = [
-  'C:/ProgramData/cocos/editors/Creator',
-];
-
-function exists(p) {
-  return !!p && fs.existsSync(p);
-}
-
-function findSpine() {
-  for (const c of SPINE_CANDIDATES) {
-    if (exists(c)) return c;
-  }
-  // 递归搜索常见盘符
-  const search = ['D:/cocos', 'C:/cocos', 'D:/', 'C:/'];
-  for (const base of search) {
-    if (!fs.existsSync(base)) continue;
-    try {
-      const dirs = fs.readdirSync(base, { withFileTypes: true });
-      for (const d of dirs) {
-        if (d.isDirectory() && /spine/i.test(d.name)) {
-          const spine = path.join(base, d.name, 'Spine.com');
-          if (fs.existsSync(spine)) return spine;
-        }
-      }
-    } catch (e) {}
-  }
-  return null;
-}
+const COCOS_CANDIDATES = process.platform === 'darwin'
+  ? ['/Applications/Cocos/Creator']
+  : ['C:/ProgramData/cocos/editors/Creator'];
 
 function findCocos() {
   for (const c of COCOS_CANDIDATES) {
@@ -75,9 +42,17 @@ async function main() {
     process.exit(1);
   }
 
+  // 安装依赖 + 构建
+  console.log('\n正在安装依赖并构建...');
+  if (!fs.existsSync(path.join(ROOT, 'node_modules'))) {
+    execSync('npm ci', { cwd: ROOT, stdio: 'inherit' });
+  }
+  execSync('npm run build', { cwd: ROOT, stdio: 'inherit' });
+
   // 2. 检测 Spine
-  const spine = findSpine();
-  console.log(`[2/4] Spine   : ${spine ? spine : '⚠️ 未自动检测到，将使用默认路径'}`);
+  const { configManager } = require(path.join(ROOT, 'dist', 'config-manager.js'));
+  const { spineExe: spine, spineVersion } = configManager.get();
+  console.log(`[2/4] Spine   : ${spine ? spine : '⚠️ 未自动检测到，请设置 SPINE_EXE'}`);
 
   // 3. 检测 Cocos Creator
   const cocos = findCocos();
@@ -87,20 +62,14 @@ async function main() {
   const envPath = path.join(ROOT, '.env');
   const envContent = [
     `# 由安装向导自动生成 ${new Date().toISOString()}`,
-    `SPINE_EXE=${spine || 'D:/cocos/SpinePro3.8.75/Spine.com'}`,
+    `SPINE_EXE=${spine || ''}`,
+    ...(spineVersion ? [`SPINE_VERSION=${spineVersion}`] : []),
     'LOG_LEVEL=info',
     `# Cocos Creator（可选）`,
     `COCOS_CREATOR=${cocos || ''}`,
   ].join('\n');
-  fs.writeFileSync(envPath, envContent, 'utf8');
-  console.log(`[4/4] 已写入配置: ${envPath}`);
-
-  // 安装依赖 + 构建
-  console.log('\n正在安装依赖并构建...');
-  if (!fs.existsSync(path.join(ROOT, 'node_modules'))) {
-    execSync('npm install', { cwd: ROOT, stdio: 'inherit' });
-  }
-  execSync('npm run build', { cwd: ROOT, stdio: 'inherit' });
+  if (!fs.existsSync(envPath)) fs.writeFileSync(envPath, envContent + '\n', { flag: 'wx' });
+  console.log(`[4/4] 配置文件 ${envPath}`);
 
   console.log('\n========================================');
   console.log(' ✅ 安装完成！');
